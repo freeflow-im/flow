@@ -125,3 +125,52 @@ export function verifyAppTicket(secret: Buffer, ticket: string, now: Date = new 
   try { t = JSON.parse(json.toString('utf8')) as AppTicket; } catch { return null; }
   return typeof t.exp === 'number' && t.exp * 1000 > now.getTime() && typeof t.accountId === 'string' ? t : null;
 }
+
+/**
+ * A hosted app's upload address (§8.1): one POST, for a few minutes, to one of the app's own routes, as the caller who
+ * asked for it. The app asks with the caller's ticket (ctx.files.uploadUrl); the host redeems it on the app's own host,
+ * where the bearer has no session, and hands the bytes to that route with the caller as the viewer. Signed with the
+ * install's (or the draft's) secret, apart from tickets and sessions by its own prefix.
+ */
+export interface AppUpload {
+  app: string; org: string; dev: string | null;
+  accountId: string; userId: string; via: string | null; invokedBy: string | null;
+  displayName: string; isAgent: boolean; scopes: string[];
+  /** The app's route, with its query: `/api/tasks/42/images?name=shot.png`. */
+  path: string;
+  jti: string; exp: number;
+}
+
+/** How long an upload address works. */
+export const APP_UPLOAD_SECONDS = 300;
+
+export function signAppUpload(secret: Buffer, u: Omit<AppUpload, 'exp' | 'jti'>, now: Date = new Date()): { token: string; exp: number } {
+  const exp = Math.floor(now.getTime() / 1000) + APP_UPLOAD_SECONDS;
+  const json = Buffer.from(JSON.stringify({ ...u, jti: randomBytes(12).toString('base64url'), exp }), 'utf8');
+  return { token: `${json.toString('base64url')}.${createHmac('sha256', secret).update(Buffer.concat([Buffer.from('upload:'), json])).digest('base64url')}`, exp };
+}
+
+/** The upload's payload, or null: malformed, another secret, or expired. Whether it was used already is the caller's to check. */
+export function verifyAppUpload(secret: Buffer, token: string, now: Date = new Date()): AppUpload | null {
+  if (typeof token !== 'string') return null;
+  const dot = token.indexOf('.');
+  if (dot <= 0) return null;
+  const json = Buffer.from(token.slice(0, dot), 'base64url');
+  const given = Buffer.from(token.slice(dot + 1), 'base64url');
+  const expected = createHmac('sha256', secret).update(Buffer.concat([Buffer.from('upload:'), json])).digest();
+  if (!json.length || given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  let u: AppUpload;
+  try { u = JSON.parse(json.toString('utf8')) as AppUpload; } catch { return null; }
+  if (typeof u.accountId !== 'string' || typeof u.path !== 'string' || typeof u.jti !== 'string' || !Array.isArray(u.scopes)) return null;
+  return typeof u.exp === 'number' && u.exp * 1000 > now.getTime() ? u : null;
+}
+
+/** The token's app and organization, unverified: only to find which secret to check it with. */
+export function peekAppUpload(token: string): { app: string; org: string; dev: string | null } | null {
+  try {
+    const u = JSON.parse(Buffer.from(token.slice(0, token.indexOf('.')), 'base64url').toString('utf8')) as Partial<AppUpload>;
+    return typeof u.app === 'string' && typeof u.org === 'string' ? { app: u.app, org: u.org, dev: typeof u.dev === 'string' ? u.dev : null } : null;
+  } catch {
+    return null;
+  }
+}

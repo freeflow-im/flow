@@ -30,6 +30,21 @@ export const HOSTED_SUBREQUESTS = 50;
 /** The first path segment the host keeps for itself in the app's isolate. */
 export const HOST_PATH = '/__freeflow/';
 
+/** Where an upload address (§8.1) is redeemed on the app's host: `<HOST_PATH>upload/<token>`. */
+export const APP_UPLOAD_PATH = `${HOST_PATH}upload/`;
+
+/**
+ * The app route an upload address may name: one of its own paths, with its query, never the host's own (`/__freeflow/`)
+ * and never another host. Back comes it in a canonical form, or null.
+ */
+export function uploadRoute(path: unknown): string | null {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.length > 1000 || /[\s#\\]/.test(path)) return null;
+  let url: URL;
+  try { url = new URL(path, 'https://app.invalid'); } catch { return null; }
+  if (url.origin !== 'https://app.invalid' || url.pathname.startsWith(HOST_PATH)) return null;
+  return url.pathname + url.search;
+}
+
 export interface HostedEnv {
   LOADER?: WorkerLoader;
   BLOBS?: R2Bucket;
@@ -260,6 +275,17 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
     if (!r.ok) throw new Error(r.error);
     await putAppFile(this.env, this.ctx.props, to, r.data!, r.file.type);
     return { ...r.file, key: to };
+  }
+
+  /**
+   * A one-use upload address (§8.1) for the caller: whoever holds it POSTs a file's bytes there (curl --data-binary), at
+   * most APP_FILE_MAX_BYTES, within a few minutes, and the host hands them to `path`, one of the app's own routes, as this
+   * caller. For a tool's caller who has the file on its own disk and no screen to upload from.
+   */
+  async uploadUrl(ticket: string, path: string, displayName?: string): Promise<{ url: string; method: 'POST'; expiresAt: string; expiresInSeconds: number; maxBytes: number }> {
+    const r = await this.org().appUploadUrlForCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, path: String(path), ...(typeof displayName === 'string' ? { displayName } : {}), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
+    if (!r.ok) throw new Error(r.error);
+    return { url: r.url, method: 'POST', expiresAt: r.expiresAt, expiresInSeconds: r.expiresInSeconds, maxBytes: APP_FILE_MAX_BYTES };
   }
 
   /**

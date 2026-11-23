@@ -1,10 +1,10 @@
 // Hosted apps' screen hosts and sessions (docs/specs/user-apps.md §6.1, §6.2).
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { appHostLabel, appOrigin, draftEgress, parseAppHost } from './hosted';
+import { appHostLabel, appOrigin, draftEgress, parseAppHost, uploadRoute } from './hosted';
 import type { UserAppManifest } from '@flow/shared';
 import { oauthDonePage } from '../routes/userApps';
-import { mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyUserAppToken } from '../org/lib/appSigning';
+import { mintUserAppToken, peekAppUpload, signAppSession, signAppTicket, signAppUpload, verifyAppSession, verifyAppTicket, verifyAppUpload, verifyUserAppToken } from '../org/lib/appSigning';
 
 const ORG = '01a1ebd3-be55-7b8d-9021-9e61067a68a6';
 
@@ -82,5 +82,30 @@ describe('the sign-in window\'s last page (§6.5)', () => {
     expect(ok).toContain('"type":"freeflow:oauth"');
     const unknown = oauthDonePage({ ok: false, label: 'the service', returnOrigin: null, error: 'gone' });
     expect(unknown).not.toContain('<script>');
+  });
+});
+
+describe('upload addresses (§8.1)', () => {
+  const upload = { app: 'taskboard', org: ORG, dev: null, accountId: 'a1', userId: 'u1', via: null, invokedBy: null, displayName: 'Cy', isAgent: true, scopes: ['taskboard:use'], path: '/api/tasks/3/images?name=a.png' };
+
+  it('name only one of the app\'s own routes', () => {
+    expect(uploadRoute('/api/tasks/3/images?name=a.png')).toBe('/api/tasks/3/images?name=a.png');
+    expect(uploadRoute('/api/x/../y')).toBe('/api/y');
+    for (const bad of ['api/x', '//evil.example/x', '/__freeflow/upload/x', '/api/../__freeflow/oauth/github', 'https://evil.example/x', '/a b', '/a#b', '/a\\b', 7, '/' + 'x'.repeat(1000)]) expect(uploadRoute(bad)).toBeNull();
+  });
+
+  it('are signed with the install\'s secret, apart from tickets, and expire', () => {
+    const secret = randomBytes(32);
+    const { token, exp } = signAppUpload(secret, upload);
+    expect(verifyAppUpload(secret, token)).toMatchObject({ ...upload, exp });
+    expect(peekAppUpload(token)).toEqual({ app: 'taskboard', org: ORG, dev: null });
+    expect(verifyAppUpload(randomBytes(32), token)).toBeNull();
+    expect(verifyAppUpload(secret, token, new Date(Date.now() + 301_000))).toBeNull();
+    // A ticket is not an upload address, nor the other way round, though both are signed with the same secret.
+    const ticket = signAppTicket(secret, { app: 'taskboard', org: ORG, accountId: 'a1', userId: 'u1', via: null, invokedBy: null });
+    expect(verifyAppUpload(secret, ticket)).toBeNull();
+    expect(verifyAppTicket(secret, token)).toBeNull();
+    // Each address is its own: two for the same route differ.
+    expect(signAppUpload(secret, upload).token).not.toBe(token);
   });
 });

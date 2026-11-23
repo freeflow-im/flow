@@ -2259,3 +2259,13 @@ one-recipient MCP correction).
   themself first.
 - **So every hosted personal agent's mailbox is checked every ten minutes** once its sponsor has an address, and an
   email invitation it keeps goes on its own calendar. Answering mail on its own stays off by default.
+
+## 2026-11-23 — Hosted apps take a local file through an upload address, not base64 (`docs/specs/user-apps.md` §8.1)
+
+- **An agent's local file reaches a hosted app through a one-use address the app's tool returns** (Taskboard #33), as
+  Docs' `upload_file` does: the platform signs it for one caller and one of the app's own routes, and serves it on the
+  app's host, so the app's own route checks and stores the bytes. Base64 in a tool call stays ruled out (context cost).
+- **The address is the credential, for five minutes and one use**; its caller's membership and scopes are checked
+  again when the bytes arrive. Used ids are kept in memory, as door keys are (a restart could allow a second use by
+  the same caller, to the same route, within the five minutes).
+
