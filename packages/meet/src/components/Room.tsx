@@ -102,6 +102,23 @@ function initials(name: string): string {
 const AVATAR_COLORS = ['#b06000', '#1558b0', '#188038', '#9334e6', '#c5221f', '#1e2a4a'];
 const colorOf = (id: string) => AVATAR_COLORS[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % AVATAR_COLORS.length]!;
 
+/**
+ * A participant's picture when they have no video: the one RealtimeKit has for them (the server gives it a public
+ * address, edge avatarLinks.ts), else their initials on a color, also when the picture fails to load.
+ */
+export function Avatar({ person, className }: { person: Pick<Person, 'name' | 'id' | 'customParticipantId'> & { picture?: string }; className: string }) {
+  const [broken, setBroken] = useState(false);
+  const picture = person.picture && /^https?:\/\//.test(person.picture) && !broken ? person.picture : null;
+  if (picture) {
+    return <img src={picture} alt="" aria-hidden="true" referrerPolicy="no-referrer" onError={() => setBroken(true)} className={`${className} rounded-full object-cover`} />;
+  }
+  return (
+    <span className={`${className} flex items-center justify-center rounded-full font-semibold text-white`} style={{ background: colorOf(person.customParticipantId ?? person.id) }} aria-hidden="true">
+      {initials(person.name)}
+    </span>
+  );
+}
+
 function Tile({ person, self, speaking, small }: { person: Person; self: boolean; speaking: boolean; small?: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
@@ -125,13 +142,7 @@ function Tile({ person, self, speaking, small }: { person: Person; self: boolean
       {person.videoEnabled ? (
         <video ref={video} autoPlay playsInline muted className={`size-full object-cover ${self ? '-scale-x-100' : ''}`} />
       ) : (
-        <span
-          className={`flex items-center justify-center rounded-full font-semibold text-white ${small ? 'size-12 text-base' : 'size-20 text-3xl'}`}
-          style={{ background: colorOf(person.customParticipantId ?? person.id) }}
-          aria-hidden="true"
-        >
-          {initials(person.name)}
-        </span>
+        <Avatar person={person} className={small ? 'size-12 text-base' : 'size-20 text-3xl'} />
       )}
       {!self && <audio ref={audio} autoPlay />}
       <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">
@@ -378,9 +389,7 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
             <ul className="m-0 flex list-none flex-col gap-2.5 overflow-auto p-4">
               {everyone.map((p) => (
                 <li key={p.id} className="flex items-center gap-2.5 text-[15px]">
-                  <span className="flex size-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold text-white" style={{ background: colorOf(p.customParticipantId ?? p.id) }} aria-hidden="true">
-                    {initials(p.name)}
-                  </span>
+                  <Avatar person={p} className="size-7 flex-none text-[11px]" />
                   <span className="min-w-0 flex-1 truncate">
                     {p === self ? `${p.name} (you)` : p.name}
                     {isGuestId(p.customParticipantId) && <span className="ml-1.5 text-xs text-muted">Guest</span>}
