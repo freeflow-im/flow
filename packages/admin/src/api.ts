@@ -103,7 +103,14 @@ export interface AppGrants { members: boolean; accounts: string[] }
 
 // Installed apps (packages/edge/src/routes/userApps.ts): every member lists them and turns one on for their own agents;
 // owners and admins install, update, change who has them, rotate the secret and remove.
+/** One OAuth provider an app declares and whether its client is set (user-apps.md §6.5). The secret never comes back. */
+export interface AppOAuthClientDTO { provider: string; label: string; clientId: string | null; set: boolean; inherited: boolean; updatedAt: number | null }
+
 export const appsApi = {
+  oauth: (org: string, name: string) => request<{ callbackUrl: string; providers: AppOAuthClientDTO[] }>('GET', `${ws(org)}/apps/${encodeURIComponent(name)}/oauth`),
+  setOAuth: (org: string, name: string, provider: string, clientId: string, clientSecret: string) =>
+    request<{ ok: true }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}/oauth/${encodeURIComponent(provider)}`, { clientId, clientSecret }),
+  clearOAuth: (org: string, name: string, provider: string) => request<{ ok: true }>('DELETE', `${ws(org)}/apps/${encodeURIComponent(name)}/oauth/${encodeURIComponent(provider)}`),
   list: async (org: string) => (await request<{ apps: InstalledAppDTO[] }>('GET', `${ws(org)}/apps`)).apps,
   preview: async (org: string, url: string) => (await request<{ manifest: UserAppManifest }>('POST', `${ws(org)}/apps/preview`, { url })).manifest,
   install: (org: string, url: string, grants: AppGrants) => request<{ app: string; secret: string }>('POST', `${ws(org)}/apps`, { url, grants }),

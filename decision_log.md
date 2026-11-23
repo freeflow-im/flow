@@ -1,5 +1,19 @@
 # Decision log
 
+## 2026-11-22 — The suite runs hosted apps' OAuth sign-ins; drafts reach approved hosts (Taskboard task 30)
+
+- **Decision:** a hosted app declares the services it signs people in to (`"oauth"` in its manifest), and the suite does
+  the sign-in. The client secret is typed by a person (an owner or admin for the install, the draft's author for a dev
+  install) and kept encrypted by the suite; app code, agents and pages never read it. Tokens are kept per person per
+  install, and the app gets only its caller's token, through the ticket. One callback on the suite origin serves every
+  app. Proposed by Claude, pending the operator's ruling.
+- **Why:** the Taskboard needed a GitHub sign-in. Done inside the app, the secret would sit in the draft's files (read by
+  every editor and agent), and the callback page cannot reach the app's host without the framed session cookie.
+- **Also:** a draft's dev install now reaches the `egress` hosts an admin already approved for the installed version
+  (before: none), so an author can try changes to an app that calls GitHub. A draft uses the install's OAuth client only
+  when its provider's two addresses are unchanged, so a draft cannot send the organization's secret elsewhere.
+- **Where:** `docs/specs/user-apps.md` §6.5, `packages/edge/src/org/services/appOAuth.ts`.
+
 ## 2026-11-22 — An organization keeps several models, one the default; an agent may be pinned to one (Taskboard task 26)
 
 - **Decision:** this extends the 2026-11-11 "one model per organization" ruling. Owners and admins keep a list of

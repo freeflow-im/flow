@@ -8,6 +8,8 @@
 //     GET of a ui/ file     the file, from R2 (`/` is ui/index.html)
 //     anything else         the app's own isolate, with the viewer in `x-freeflow-viewer`
 //     GET /__freeflow/avatars/<key>  a member's picture, for an app that declares "members:read" (ctx.members' `picture`)
+//     /__freeflow/oauth/<provider>   the viewer's sign-in to a service the manifest declares under "oauth" (§6.5):
+//                                    GET status, POST …/start → { url } to open in a window, DELETE to disconnect
 //   neither                 401, one line: the screen is opened from its tab
 import type { HostedCode, HostedEnv, HostedExports } from './hosted';
 import type { UserAppManifest } from '@flow/shared';
@@ -35,6 +37,19 @@ async function memberPicture(env: HostedEnv, manifest: UserAppManifest, path: st
   const type = o?.httpMetadata?.contentType ?? 'image/webp';
   if (!o || !/^image\/(png|jpeg|gif|webp)$/.test(type)) return new Response('not found', { status: 404 });
   return new Response(o.body, { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+}
+
+/** The viewer's sign-in to another service (§6.5), on the app's own host: the Org object does the work, as the viewer. */
+const OAUTH = /^\/__freeflow\/oauth\/([a-z][a-z0-9-]{1,19})(\/start)?$/;
+
+async function oauthPath(req: Request, path: string, org: DurableObjectStub<import('../org/object').Org>, p: { organizationId: string; name: string; ticket: string; dev?: string }): Promise<Response | null> {
+  const m = OAUTH.exec(path);
+  if (!m) return null;
+  const op = m[2] ? (req.method === 'POST' ? 'start' : null) : req.method === 'GET' ? 'status' : req.method === 'DELETE' ? 'disconnect' : null;
+  if (!op) return new Response('method not allowed', { status: 405 });
+  const r = await org.appOAuthForCaller({ ...p, op, provider: m[1]! });
+  const headers = { 'cache-control': 'no-store' };
+  return r.ok ? Response.json(r.value ?? { ok: true }, { headers }) : Response.json({ error: r.error }, { status: 400, headers });
 }
 
 const refuse = () =>
@@ -91,7 +106,10 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
 
   const code = (await org.userAppCode(at.app)) as HostedCode | null;
   if (!code) return new Response('This app has no installed version.', { status: 404 });
-  if (url.pathname.startsWith(HOST_PATH)) return (req.method === 'GET' && (await memberPicture(env, code.manifest, url.pathname))) || new Response('not found', { status: 404 });
+  if (url.pathname.startsWith(HOST_PATH)) {
+    return (await oauthPath(req, url.pathname, org, { organizationId: at.org, name: at.app, ticket: viewer.ticket }))
+      || (req.method === 'GET' && (await memberPicture(env, code.manifest, url.pathname))) || new Response('not found', { status: 404 });
+  }
 
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = `ui${url.pathname === '/' ? '/index.html' : url.pathname}`;
@@ -131,10 +149,13 @@ async function serveDraftScreen(req: Request, url: URL, at: { devHost: string; o
     return new Response(null, { status: 302, headers: { location: url.pathname + url.search, 'set-cookie': `${APP_SESSION_COOKIE}=${opened.cookie}; Path=/; HttpOnly; ${attrs}; Max-Age=${opened.maxAge}`, 'cache-control': 'no-store' } });
   }
   const cookie = cookieOf(req, APP_SESSION_COOKIE);
-  type Preview = { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: { accountId: string; userId: string; displayName: string; ticket: string } };
+  type Preview = { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[]; viewer: { accountId: string; userId: string; displayName: string; ticket: string } };
   const draft = cookie ? ((await org.draftForPreview({ organizationId: at.org, devHost: at.devHost, cookie })) as unknown as Preview | null) : null;
   if (!draft) return refuse();
-  if (url.pathname.startsWith(HOST_PATH)) return (req.method === 'GET' && (await memberPicture(env, draft.manifest, url.pathname))) || new Response('not found', { status: 404 });
+  if (url.pathname.startsWith(HOST_PATH)) {
+    return (await oauthPath(req, url.pathname, org, { organizationId: at.org, name: draft.name, ticket: draft.viewer.ticket, dev: draft.author }))
+      || (req.method === 'GET' && (await memberPicture(env, draft.manifest, url.pathname))) || new Response('not found', { status: 404 });
+  }
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = `ui${url.pathname === '/' ? '/index.html' : url.pathname}`;
     const body = draft.files[file];

@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, InstalledAppDTO, UserAppManifest, WorkspaceDTO } from '@flow/shared';
 import { AppIcon, appsChanged } from '@flow/suite-bar';
-import { adminApi, appsApi, type AppGrants, type AppUploadDTO } from '../api';
+import { adminApi, appsApi, type AppGrants, type AppOAuthClientDTO, type AppUploadDTO } from '../api';
 import { Button, Card, Confirm, ErrorLine, Row, Toggle } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -86,7 +86,7 @@ function Uploads({ org, installed, accounts, onChanged }: { org: WorkspaceDTO; i
       {open && (
         <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="upload-card">
           <div className="inline-flex items-center gap-2 text-sm font-semibold"><AppIcon icon={open.iconUrl ? null : open.manifest.icon} iconUrl={open.iconUrl} size={24} />{open.manifest.label} <span className="font-normal text-muted">version {open.version}</span></div>
-          <HostedNotice uses={open.manifest.uses ?? []} egress={open.manifest.egress ?? []} />
+          <HostedNotice uses={open.manifest.uses ?? []} egress={open.manifest.egress ?? []} oauth={(open.manifest.oauth ?? []).map((o) => o.label)} />
           <Asks manifest={open.manifest} />
           <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
           <div className="flex gap-2">
@@ -172,13 +172,72 @@ const ExternalNotice = ({ origin }: { origin: string }) => (
 );
 
 /** A hosted app's notice (§7.2): FreeFlow runs it; what of the suite it may use, and which outside hosts it may reach. */
-const HostedNotice = ({ uses, egress }: { uses: string[]; egress: string[] }) => (
+const HostedNotice = ({ uses, egress, oauth }: { uses: string[]; egress: string[]; oauth: string[] }) => (
   <p className="rounded-md border border-hairline bg-panel px-3 py-2 text-xs" data-testid="hosted-notice">
     FreeFlow runs this app and keeps its data in this organization.{' '}
     {uses.length ? `It may use: ${uses.join(', ')}, and only what the person using it may use too. ` : 'It gets no access to anything else in FreeFlow. '}
     {egress.length ? `It may reach these outside hosts: ${egress.join(', ')}.` : 'It cannot reach the internet.'}
+    {oauth.length ? ` People may sign in to ${oauth.join(', ')} from it; it then acts on their accounts there.` : ''}
   </p>
 );
+
+/**
+ * A hosted app's sign-in to other services (§6.5): for each provider the manifest declares, the client id and secret an
+ * owner or admin registered with that service, and the one callback address to register there. The secret is never shown.
+ */
+function OAuthClients({ org, app }: { org: WorkspaceDTO; app: InstalledAppDTO }) {
+  const qc = useQueryClient();
+  const key = ['app-oauth', org.id, app.name];
+  const q = useQuery({ queryKey: key, queryFn: () => appsApi.oauth(org.id, app.name) });
+  const providers = q.data?.providers ?? [];
+  if (!providers.length) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-hairline p-3 text-xs" data-testid={`oauth-${app.name}`}>
+      <p className="font-semibold">Sign-in to other services</p>
+      <p className="text-muted">
+        Register an OAuth app with each service, with this callback address, then enter its client id and secret here. FreeFlow keeps the secret: the app’s code, agents and this page never see it again.
+      </p>
+      <code className="break-all select-all" data-testid="oauth-callback">{q.data?.callbackUrl}</code>
+      {providers.map((p) => <OAuthClientRow key={p.provider} org={org} app={app.name} p={p} onSaved={() => void qc.invalidateQueries({ queryKey: key })} />)}
+    </div>
+  );
+}
+
+function OAuthClientRow({ org, app, p, onSaved }: { org: WorkspaceDTO; app: string; p: AppOAuthClientDTO; onSaved(): void }) {
+  const [editing, setEditing] = useState(!p.set);
+  const [clientId, setClientId] = useState(p.clientId ?? '');
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => appsApi.setOAuth(org.id, app, p.provider, clientId.trim(), secret.trim()),
+    onMutate: () => setError(null),
+    onSuccess: () => { setSecret(''); setEditing(false); onSaved(); },
+    onError: (e) => setError(errorText(e)),
+  });
+  const clear = useMutation({ mutationFn: () => appsApi.clearOAuth(org.id, app, p.provider), onSuccess: () => { setEditing(true); onSaved(); }, onError: (e) => setError(errorText(e)) });
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-hairline pt-2" data-testid={`oauth-${app}-${p.provider}`}>
+      <div className="flex items-center gap-2">
+        <span className="font-medium">{p.label}</span>
+        <span className={p.set ? 'text-ok' : 'text-muted'}>{p.set ? `Set up (client ${p.clientId})` : 'Not set up: people cannot sign in yet'}</span>
+      </div>
+      {editing ? (
+        <form className="flex flex-col gap-1.5 sm:flex-row" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+          <input className="min-w-0 flex-1 rounded-md border border-border px-2 py-1" placeholder="Client id" value={clientId} onChange={(e) => setClientId(e.target.value)} autoComplete="off" data-testid="oauth-client-id" />
+          <input className="min-w-0 flex-1 rounded-md border border-border px-2 py-1" type="password" placeholder="Client secret" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" data-testid="oauth-client-secret" />
+          <Button type="submit" kind="primary" disabled={!clientId.trim() || !secret.trim() || save.isPending} testid="oauth-save">{save.isPending ? 'Saving…' : 'Save'}</Button>
+          {p.set && <Button kind="link" onClick={() => setEditing(false)}>Cancel</Button>}
+        </form>
+      ) : (
+        <div className="flex gap-2">
+          <Button onClick={() => setEditing(true)} testid="oauth-change">Change</Button>
+          <Button kind="link" onClick={() => clear.mutate()} testid="oauth-clear">Remove</Button>
+        </div>
+      )}
+      {error && <p className="text-danger">{error}</p>}
+    </div>
+  );
+}
 
 /** The secret, shown once (install and rotation), with where the app sends its events. */
 function SecretOnce({ org, name, secret, onDone }: { org: WorkspaceDTO; name: string; secret: string; onDone(): void }) {
@@ -229,7 +288,7 @@ function Install({ org, accounts, onInstalled }: { org: WorkspaceDTO; accounts: 
         <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="install-card">
           <div className="text-sm font-semibold">{manifest.icon ? `${manifest.icon} ` : ''}{manifest.label} <span className="font-normal text-muted">({manifest.name})</span></div>
           {manifest.description && <p className="text-xs text-muted">{manifest.description}</p>}
-          {'url' in manifest.server ? <ExternalNotice origin={new URL(manifest.server.url).origin} /> : <HostedNotice uses={manifest.uses ?? []} egress={manifest.egress ?? []} />}
+          {'url' in manifest.server ? <ExternalNotice origin={new URL(manifest.server.url).origin} /> : <HostedNotice uses={manifest.uses ?? []} egress={manifest.egress ?? []} oauth={(manifest.oauth ?? []).map((o) => o.label)} />}
           <Asks manifest={manifest} />
           <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
           <div>
@@ -293,6 +352,7 @@ function InstalledApp({ org, app, admin, accounts, onChanged }: { org: Workspace
           )}
         </div>
       )}
+      {admin && app.hosted && <OAuthClients org={org} app={app} />}
       {editing && (
         <div className="flex flex-col gap-2 rounded-md border border-hairline p-3">
           <GrantEditor value={editing} onChange={setEditing} accounts={accounts} />

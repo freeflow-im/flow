@@ -23,6 +23,9 @@
 //   GET    /v1/workspaces/:id/apps/:name/icon       an image icon (§4): the installed version's, or ?v=<version>'s (members)
 //   POST   /v1/workspaces/:id/tools/call            the bridge runs an app tool (the bridge runs built-in tools itself)
 //   POST   /v1/apps/:org/:name/events               an event from the app, signed with its secret (§5.1): no session
+//   GET    …/apps/:name/oauth, …/drafts/:name/oauth  the app's OAuth providers and whether each client is set (§6.5)
+//   PUT|DELETE …/oauth/:provider                     set or clear a client id and secret (owners and admins; a draft's author)
+//   GET    /v1/apps/oauth/callback                  where every provider sends the person back (§6.5): no session
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { appIconUrl, checkAppIcon, checkHostedFiles, checkUserAppManifest, isHosted, isImageIcon, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
@@ -32,6 +35,7 @@ import { ApiError, badRequest, forbidden, unauthorized } from '../errors';
 import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 import { holderOf, runAppTool } from '../registry/userApps';
 import { SIGNATURE_HEADER } from '../org/lib/appSigning';
+import { organizationOfState } from '../org/services/appOAuth';
 
 type C = Context<{ Bindings: AuthEnv }>;
 
@@ -246,6 +250,7 @@ userAppRoutes.get('/v1/workspaces/:id/apps/:name/export', async (c) => {
 
 const DraftBody = z.object({ name: z.string().min(2).max(20), label: z.string().trim().min(1).max(40).optional(), fromInstalled: z.boolean().optional() });
 const FileBody = z.object({ path: z.string().min(1).max(200), text: z.string().max(1_500_000) });
+const OAuthClientBody = z.object({ clientId: z.string().min(1).max(500), clientSecret: z.string().min(1).max(2000) });
 const TryBody = z.object({ tool: z.string().min(1).max(32), input: z.record(z.string(), z.unknown()).default({}) });
 
 /** Who builds: any member or agent but a guest (Scott, 2026-11-17); the draft is the caller's account's. */
@@ -419,4 +424,73 @@ userAppRoutes.post('/v1/apps/:org/:name/events', async (c) => {
   if (raw.length > 80_000) return c.json({ error: { code: 'too_large', message: 'the event is too large' } }, 413);
   const r = await orgStub(c, organizationId).publishUserAppEvent({ organizationId, name: c.req.param('name'), body: raw, signature: c.req.header(SIGNATURE_HEADER) ?? null });
   return r.ok ? c.json({ id: r.id }, 201) : c.json({ error: { code: 'refused', message: r.error } }, r.status as 400);
+});
+
+// ---- signing in to other services (§6.5) ----
+
+/** A person, never an agent: a client secret is typed by a person and read by no agent (§6.5). */
+function personOnly(m: Member): void {
+  if (m.isAgent || m.via) throw forbidden('a person sets an app\'s client secret, never an agent');
+}
+
+userAppRoutes.get('/v1/workspaces/:id/apps/:name/oauth', async (c) => {
+  const m = await adminOf(c);
+  c.header('Cache-Control', 'no-store');
+  return c.json(unwrap(await orgStub(c, m.organizationId).appOAuthClients({ name: c.req.param('name') })));
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/:name/oauth/:provider', async (c) => {
+  const m = await adminOf(c);
+  const b = await body(c, OAuthClientBody);
+  unwrap(await orgStub(c, m.organizationId).setAppOAuthClient({ name: c.req.param('name'), provider: c.req.param('provider'), clientId: b.clientId, clientSecret: b.clientSecret, by: m.account.id }));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.delete('/v1/workspaces/:id/apps/:name/oauth/:provider', async (c) => {
+  const m = await adminOf(c);
+  unwrap(await orgStub(c, m.organizationId).deleteAppOAuthClient({ name: c.req.param('name'), provider: c.req.param('provider') }));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.get('/v1/workspaces/:id/apps/drafts/:name/oauth', async (c) => {
+  const m = await builderOf(c);
+  c.header('Cache-Control', 'no-store');
+  return c.json(unwrap(await orgStub(c, m.organizationId).appOAuthClients({ name: c.req.param('name'), dev: m.account.id })));
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/drafts/:name/oauth/:provider', async (c) => {
+  const m = await builderOf(c);
+  personOnly(m);
+  const b = await body(c, OAuthClientBody);
+  unwrap(await orgStub(c, m.organizationId).setAppOAuthClient({ name: c.req.param('name'), dev: m.account.id, provider: c.req.param('provider'), clientId: b.clientId, clientSecret: b.clientSecret, by: m.account.id }));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name/oauth/:provider', async (c) => {
+  const m = await builderOf(c);
+  unwrap(await orgStub(c, m.organizationId).deleteAppOAuthClient({ name: c.req.param('name'), dev: m.account.id, provider: c.req.param('provider') }));
+  return c.json({ ok: true });
+});
+
+const esc = (t: string) => t.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+
+/** The page the sign-in window ends on: it tells the app's screen (its opener) and closes, or says what went wrong. */
+export function oauthDonePage(r: { ok: boolean; label: string; returnOrigin: string | null; provider?: string; error?: string }): string {
+  const text = r.ok ? `Signed in to ${r.label}. You can close this window.` : (r.error ?? 'The sign-in did not finish.');
+  const notify = r.returnOrigin
+    ? `<script>try{window.opener&&window.opener.postMessage(${JSON.stringify({ type: 'freeflow:oauth', provider: r.provider ?? null, ok: r.ok })},${JSON.stringify(r.returnOrigin)})}catch(e){}${r.ok ? 'setTimeout(function(){window.close()},600)' : ''}</script>`
+    : '';
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(r.ok ? 'Signed in' : 'Sign-in failed')}</title>`
+    + `<body style="font:15px system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;color:#222"><p style="max-width:28em;text-align:center">${esc(text)}</p>${notify}</body>`;
+}
+
+/** Every provider sends the person back here (§6.5): the state names the organization, whose object finishes the sign-in. */
+userAppRoutes.get('/v1/apps/oauth/callback', async (c) => {
+  c.header('Cache-Control', 'no-store');
+  c.header('Referrer-Policy', 'no-referrer');
+  const state = c.req.query('state') ?? '';
+  const org = organizationOfState(state);
+  if (!org) return c.html(oauthDonePage({ ok: false, label: 'the service', returnOrigin: null, error: 'This sign-in link is not valid. Start it again from the app.' }), 400);
+  const r = await orgStub(c, org).finishAppOAuth({ state, code: c.req.query('code') ?? null, error: c.req.query('error') ?? null });
+  return c.html(oauthDonePage(r), r.ok ? 200 : 400);
 });

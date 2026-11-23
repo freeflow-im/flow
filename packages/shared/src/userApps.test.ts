@@ -55,6 +55,19 @@ describe('checkUserAppManifest', () => {
     expect(p.some((x) => x.startsWith('egress:'))).toBe(true);
   });
 
+  it('checks the services a hosted app signs people in to (§6.5)', () => {
+    const gh = { id: 'github', label: 'GitHub', authorizeUrl: 'https://github.com/login/oauth/authorize', tokenUrl: 'https://github.com/login/oauth/access_token', scopes: ['repo'] };
+    const hostedApp = { ...taskboard(), server: { hosted: true as const }, ui: { hosted: true as const } };
+    expect(problems({ ...hostedApp, oauth: [gh] })).toEqual([]);
+    expect(problems({ ...taskboard(), oauth: [gh] }).some((x) => x.startsWith('oauth: only a hosted app'))).toBe(true);
+    expect(problems({ ...hostedApp, oauth: [gh, gh] })).toContain('oauth: "github" is declared twice');
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, id: 'Git Hub' }] })[0]).toMatch(/^oauth: "Git Hub" must be/);
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenUrl: 'http://github.com/token' }] })).toContain('oauth.github.tokenUrl: must be https');
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenAuth: 'basic' as const, authorizeParams: { access_type: 'offline', prompt: 'consent' } }] })).toEqual([]);
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, authorizeParams: { redirect_uri: 'https://evil.example.com' } }] })).toContain('oauth.github.authorizeParams: "redirect_uri" is set by FreeFlow');
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenAuth: 'header' as never }] })[0]).toMatch(/^oauth\.0\.tokenAuth/);
+  });
+
   it('needs https unless told otherwise', () => {
     const m = { ...taskboard(), server: { url: 'http://localhost:8790/freeflow' } };
     expect(problems(m)).toContain('server.url: must be https');

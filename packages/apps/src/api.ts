@@ -21,6 +21,9 @@ export interface InstalledApp {
 /** One of the person's drafts (§9.6): its files (path → bytes) and what stands between it and a version. */
 export interface AppDraft { name: string; label: string; author: string; editors: { account: string; name: string }[]; files: Record<string, number>; problems: string[]; devHost: string; createdAt: string; updatedAt: string }
 
+/** One OAuth provider a draft declares and whether a client is set for it (user-apps.md §6.5). The secret never comes back. */
+export interface AppOAuthClient { provider: string; label: string; clientId: string | null; set: boolean; inherited: boolean; updatedAt: number | null }
+
 /** A tool call's answer, as the Worker gives it. */
 export type ToolAnswer = { ok: true; result: unknown } | { ok: false; error: string };
 
@@ -65,6 +68,10 @@ export const appsApi = {
   deleteFile: async (org: string, name: string, path: string) => (await request<{ draft: AppDraft }>('DELETE', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`)).draft,
   tryTool: (org: string, name: string, tool: string, input: Record<string, unknown>) => request<ToolAnswer>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/try`, { tool, input }),
   preview: (org: string, name: string) => request<{ url: string }>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/preview`, {}),
+  draftOAuth: (org: string, name: string) => request<{ callbackUrl: string; providers: AppOAuthClient[] }>('GET', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/oauth`),
+  setDraftOAuth: (org: string, name: string, provider: string, clientId: string, clientSecret: string) =>
+    request<{ ok: true }>('PUT', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/oauth/${encodeURIComponent(provider)}`, { clientId, clientSecret }),
+  clearDraftOAuth: (org: string, name: string, provider: string) => request<{ ok: true }>('DELETE', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/oauth/${encodeURIComponent(provider)}`),
   publish: (org: string, name: string) => request<{ name: string; version: number }>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/publish`, {}),
   // Installing from the builder (owners and admins, §9.6): a published version, with who gets it.
   installVersion: (org: string, name: string, version: number, grants: AppGrants) => request<{ app: string; version: number }>('POST', `${ws(org)}/apps`, { name, version, grants }),

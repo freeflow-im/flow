@@ -8,7 +8,7 @@ import { appsApi, type AppGrants, type InstalledApp, type OrgAccount } from '../
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-interface Manifest { label?: string; icon?: string; ui?: unknown; uses?: string[]; egress?: string[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
+interface Manifest { label?: string; icon?: string; ui?: unknown; uses?: string[]; egress?: string[]; oauth?: { label: string }[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
 
 /** The grants an installed app has now, as the popup starts with them. */
 function grantsOf(app: InstalledApp | undefined): AppGrants {
@@ -71,6 +71,7 @@ export function InstallDialog({ org, name, version, onClose, onDone }: { org: st
           FreeFlow runs this app and keeps its data in this organization.{' '}
           {manifest?.uses?.length ? `It may use: ${manifest.uses.join(', ')}, and only what the person using it may use too. ` : 'It gets no access to anything else in FreeFlow. '}
           {manifest?.egress?.length ? `It may reach these outside hosts: ${manifest.egress.join(', ')}.` : 'It cannot reach the internet.'}
+          {manifest?.oauth?.length ? ` People may sign in to ${manifest.oauth.map((o) => o.label).join(', ')} from it; set its client in Admin › Apps after installing.` : ''}
         </p>
         {manifest?.tools && (
           <details className="text-xs">

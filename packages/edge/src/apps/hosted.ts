@@ -262,6 +262,17 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
     return { ...r.file, key: to };
   }
 
+  /**
+   * Signing the caller in to another service the manifest declares under "oauth" (§6.5): `start` → `{ url }` to open in a
+   * window, `status` → `{ connected, ... }`, `token` → the caller's token or null, `disconnect`. The client secret stays here.
+   */
+  async oauth(ticket: string, op: 'start' | 'status' | 'token' | 'disconnect', provider: string): Promise<unknown> {
+    if (!['start', 'status', 'token', 'disconnect'].includes(op)) throw new Error('oauth: start, status, token or disconnect');
+    const r = await this.org().appOAuthForCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, op, provider: String(provider), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
+    if (!r.ok) throw new Error(r.error);
+    return r.value;
+  }
+
   async publish(type: string, data?: unknown, ref?: { kind: string; id: string }, about?: string[]): Promise<{ id: string }> {
     const r = await this.org().publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about }, ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!r.ok) throw new Error(r.error);
@@ -328,13 +339,23 @@ export async function hostedWorker(env: HostedEnv, exports: HostedExports, org: 
 }
 
 /**
- * A draft's dev install (§9.3): its files from the draft, its own store apart from the install's, and no internet until an
- * admin approves a version. Only its author calls it, so every ticket it gets is the author's.
+ * The hosts a draft's dev install may reach (§9.3): those its manifest declares that an admin already approved for the
+ * installed version of the same app. A draft of an app not installed yet reaches nothing.
  */
-export async function draftWorker(env: HostedEnv, exports: HostedExports, org: string, author: string, draft: { manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string }): Promise<WorkerStub> {
+export function draftEgress(draft: UserAppManifest, installed: UserAppManifest | null): string[] {
+  const approved = new Set(installed?.egress ?? []);
+  return (draft.egress ?? []).filter((h) => approved.has(h));
+}
+
+/**
+ * A draft's dev install (§9.3): its files from the draft, its own store apart from the install's, and only the outside
+ * hosts an admin already approved for the installed version (`egress`, from draftEgress). Only its author calls it, so
+ * every ticket it gets is the author's.
+ */
+export async function draftWorker(env: HostedEnv, exports: HostedExports, org: string, author: string, draft: { manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[] }): Promise<WorkerStub> {
   const app = draft.manifest.name;
   return sourceWorker(env, exports, {
-    key: `dev:${org}:${app}:${author}:${draft.key}`,
+    key: `dev:${org}:${app}:${author}:${draft.key}:${draft.egress.join(',')}`,
     files: Object.fromEntries(Object.entries(draft.files).map(([p, b]) => [p, b.byteLength])),
     read: async (p) => {
       const b = draft.files[p];
@@ -342,7 +363,7 @@ export async function draftWorker(env: HostedEnv, exports: HostedExports, org: s
       return decoder.decode(b);
     },
     props: { org, app, dev: author },
-    egress: [],
+    egress: draft.egress,
   });
 }
 

@@ -41,9 +41,10 @@ import {
   type AppCallerContext, type AgentForApp, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { appOrigin, callHostedTool, devHostLabel, draftEgress, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
 import { addDraftEditor, createDraft, deleteDraft, deleteDraftFile, draftAuthorFor, draftByDevHost, draftCode, draftsEditableBy, getDraft, listDrafts, mayEditDraft, readDraftFile, removeDraftEditor, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
+import { beginOAuth, deleteOAuthClient, finishOAuth, listOAuthClients, oauthCallbackUrl, oauthDisconnect, oauthStatus, oauthToken, removeAppOAuth, setOAuthClient, takeOAuthState, type AppOAuthClientDTO, type AppOAuthStatus, type AppOAuthToken } from './services/appOAuth';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -1402,6 +1403,7 @@ export class Org extends DurableObject<OrgEnv> {
 
   async deleteAppDraft(name: string, author: string, organizationId?: string): Promise<DirectoryAnswer<void>> {
     const done = await answered(() => withDb(this.db, () => deleteDraft(name, author)));
+    if (done.ok) await withDb(this.db, () => removeAppOAuth({ name, dev: author })).catch((err: Error) => console.error(`[apps] oauth ${name}: ${err.message}`));
     // Its dev install's data goes with it (§9.3).
     if (done.ok && organizationId && this.env.APP_STORE) {
       const props = { org: organizationId, app: name, dev: author };
@@ -1433,13 +1435,15 @@ export class Org extends DurableObject<OrgEnv> {
     }
     if (!draft.manifest.tools.some((t) => t.name === p.tool)) return { ok: false, error: `the draft has no tool ${p.tool}` };
     const accountId = p.as ?? p.author;
+    const installed = await withDb(this.db, () => appForUse(p.name));
+    const egress = draftEgress(draft.manifest, installed && isHosted(installed.manifest) ? installed.manifest : null);
     const caller = {
       organizationId: p.organizationId, accountId, userId: p.userId, displayName: p.displayName, kind: p.as ? 'shared_agent' as const : 'person' as const, role: p.role,
       via: null, invokedBy: null, scopes: draft.manifest.scopes.map((s) => s.id),
       ticket: signAppTicket(draft.secret, { app: p.name, org: p.organizationId, accountId, userId: p.userId, via: null, invokedBy: null }),
     };
     try {
-      const worker = await draftWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, p.author, draft);
+      const worker = await draftWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, p.author, { ...draft, egress });
       return await callHostedTool(worker, p.tool, p.input, caller);
     } catch (err) {
       return { ok: false, error: `the draft could not run: ${(err as Error).message}`.slice(0, 500) };
@@ -1478,7 +1482,7 @@ export class Org extends DurableObject<OrgEnv> {
    * A draft preview's request (§9.6): the session checked, its author still a member; back come the viewer with a ticket,
    * and the draft's files, to serve its screen and run its isolate.
    */
-  async draftForPreview(p: { organizationId: string; devHost: string; cookie: string }): Promise<{ name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: AppSession & { ticket: string } } | null> {
+  async draftForPreview(p: { organizationId: string; devHost: string; cookie: string }): Promise<{ name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[]; viewer: AppSession & { ticket: string } } | null> {
     const found = await withDb(this.db, async () => {
       const d = await draftByDevHost(p.devHost);
       return d ? { ...d, code: await draftCode(d.name, d.author).catch(() => null) } : null;
@@ -1487,7 +1491,9 @@ export class Org extends DurableObject<OrgEnv> {
     const s = verifyAppSession(found.code.secret, p.cookie);
     if (!s || s.accountId !== found.author || !this.userOfAccount(found.author)) return null;
     const ticket = signAppTicket(found.code.secret, { app: found.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
-    return { name: found.name, author: found.author, manifest: found.code.manifest, files: found.code.files, key: found.code.key, viewer: { ...s, ticket } };
+    const installed = await withDb(this.db, () => appForUse(found.name));
+    const egress = draftEgress(found.code.manifest, installed && isHosted(installed.manifest) ? installed.manifest : null);
+    return { name: found.name, author: found.author, manifest: found.code.manifest, files: found.code.files, key: found.code.key, egress, viewer: { ...s, ticket } };
   }
 
   /** Publishes a draft as a hosted version (§9.6): its files to R2 and a version an owner or admin installs. */
@@ -1733,6 +1739,92 @@ export class Org extends DurableObject<OrgEnv> {
       // Its reason, back to the route, which logs it: an RPC's own error says only "internal".
       return { ok: false, error: (err as Error).message };
     }
+  }
+
+  // ---- signing in to other services (§6.5) ----
+
+  /** A hosted app or a draft's manifest, and the installed manifest (a draft's OAuth may use the install's client). */
+  private async oauthApp(name: string, dev?: string): Promise<{ manifest: UserAppManifest; secret: Buffer; installed: UserAppManifest | null; devHost?: string } | null> {
+    const live = await withDb(this.db, () => appForUse(name));
+    const installed = live && isHosted(live.manifest) ? live.manifest : null;
+    if (!dev) return live && installed ? { manifest: live.manifest, secret: live.secret, installed } : null;
+    const d = await withDb(this.db, () => draftCode(name, dev)).catch(() => null);
+    return d && isHosted(d.manifest) ? { manifest: d.manifest, secret: d.secret, installed, devHost: d.devHost } : null;
+  }
+
+  /**
+   * A hosted app's call about its caller's sign-in to another service (AppSuite.oauth): the ticket must be this install's
+   * (or this draft's, and its author's) and the caller still a member. `start` gives the provider's address to open,
+   * `status` whether they are connected, `token` their token (refreshed when it ran out), `disconnect` forgets it.
+   */
+  async appOAuthForCaller(p: { organizationId: string; name: string; ticket: string; op: 'start' | 'status' | 'token' | 'disconnect'; provider: string; dev?: string }): Promise<{ ok: true; value: AppOAuthStatus | AppOAuthToken | { url: string } | null } | { ok: false; error: string }> {
+    const app = await this.oauthApp(p.name, p.dev);
+    if (!app) return { ok: false, error: 'no such hosted app here' };
+    const t = verifyAppTicket(app.secret, p.ticket);
+    if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
+    if (p.dev && t.accountId !== p.dev && !(await withDb(this.db, () => mayEditDraft(p.name, p.dev!, t.accountId)))) return { ok: false, error: 'a draft acts only as its author or its editors' };
+    if (!this.userOfAccount(t.accountId)) return { ok: false, error: 'the caller is not a member here any more' };
+    const at = { name: p.name, dev: p.dev ?? '' };
+    const provider = String(p.provider);
+    try {
+      return await withDb(this.db, async () => {
+        switch (p.op) {
+          case 'status': return { ok: true as const, value: await oauthStatus(at, app.manifest, provider, t.accountId) };
+          case 'token': return { ok: true as const, value: await oauthToken(at, app.manifest, app.installed, provider, t.accountId) };
+          case 'disconnect': await oauthDisconnect(at, app.manifest, provider, t.accountId); return { ok: true as const, value: null };
+          case 'start': {
+            if (!this.env.APPS_DOMAIN) throw new ApiError(503, 'no_apps_domain', 'this server does not serve app screens');
+            const scheme = this.env.APPS_SCHEME ?? 'https';
+            const returnOrigin = p.dev ? `${scheme}://${devHostLabel(app.devHost!, p.organizationId)}.${this.env.APPS_DOMAIN}` : appOrigin(p.name, p.organizationId, this.env.APPS_DOMAIN, scheme);
+            return { ok: true as const, value: await beginOAuth({ at, organizationId: p.organizationId, manifest: app.manifest, installed: app.installed, provider, accountId: t.accountId, returnOrigin, redirectUri: oauthCallbackUrl(config.webUrlBase) }) };
+          }
+          default: return { ok: false as const, error: 'unknown oauth call' };
+        }
+      });
+    } catch (err) {
+      return { ok: false, error: (err as Error).message.slice(0, 500) };
+    }
+  }
+
+  /**
+   * The provider sent the person back (GET /v1/apps/oauth/callback): the state taken (once), the code exchanged with the
+   * client secret, and the token kept for whoever started. Back comes the app's origin, for the window to tell the screen.
+   */
+  async finishAppOAuth(p: { state: string; code: string | null; error: string | null }): Promise<{ ok: boolean; label: string; returnOrigin: string | null; provider?: string; error?: string }> {
+    const row = await withDb(this.db, () => takeOAuthState(p.state));
+    if (!row) return { ok: false, label: 'the service', returnOrigin: null, error: 'This sign-in is unknown or took longer than ten minutes. Start it again from the app.' };
+    const app = await this.oauthApp(row.name, row.dev || undefined);
+    const label = app?.manifest.oauth?.find((o) => o.id === row.provider)?.label ?? row.provider;
+    if (!app) return { ok: false, label, returnOrigin: row.returnOrigin, error: 'The app is no longer here.' };
+    if (p.error || !p.code) return { ok: false, label, provider: row.provider, returnOrigin: row.returnOrigin, error: `${label} did not sign you in${p.error ? ` (${p.error.slice(0, 100)})` : ''}.` };
+    try {
+      await withDb(this.db, () => finishOAuth({ state: row, code: p.code!, manifest: app.manifest, installed: app.installed, redirectUri: oauthCallbackUrl(config.webUrlBase) }));
+      return { ok: true, label, provider: row.provider, returnOrigin: row.returnOrigin };
+    } catch (err) {
+      return { ok: false, label, provider: row.provider, returnOrigin: row.returnOrigin, error: (err as Error).message.slice(0, 300) };
+    }
+  }
+
+  /** An app's OAuth clients (the install's, or a draft's with `dev`), for Admin › Apps or the Build page: never a secret. */
+  async appOAuthClients(p: { name: string; dev?: string }): Promise<DirectoryAnswer<{ callbackUrl: string; providers: AppOAuthClientDTO[] }>> {
+    return answered(async () => {
+      const app = await this.oauthApp(p.name, p.dev);
+      if (!app) throw new ApiError(404, 'not_found', p.dev ? 'no such draft' : 'no such hosted app here');
+      const providers = await withDb(this.db, () => listOAuthClients({ name: p.name, dev: p.dev ?? '' }, app.manifest, app.installed));
+      return { callbackUrl: oauthCallbackUrl(config.webUrlBase), providers };
+    });
+  }
+
+  async setAppOAuthClient(p: { name: string; dev?: string; provider: string; clientId: string; clientSecret: string; by: string }): Promise<DirectoryAnswer<void>> {
+    return answered(async () => {
+      const app = await this.oauthApp(p.name, p.dev);
+      if (!app) throw new ApiError(404, 'not_found', p.dev ? 'no such draft' : 'no such hosted app here');
+      await withDb(this.db, () => setOAuthClient({ name: p.name, dev: p.dev ?? '' }, app.manifest, p));
+    });
+  }
+
+  async deleteAppOAuthClient(p: { name: string; dev?: string; provider: string }): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => deleteOAuthClient({ name: p.name, dev: p.dev ?? '' }, p.provider)));
   }
 
   /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */
