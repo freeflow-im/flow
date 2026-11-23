@@ -242,6 +242,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       : 'and you do not answer it on your own: you read it when the user asks, or when an automation they made wakes you (the user can turn on answering it in Organization settings → Your assistant)';
     return [
       `- You have your own email address, ${address}, with its own mailbox, separate from the user's. Mail to it reaches you only from the senders the user allows (they set them in Organization settings → Your assistant; until they add one, your mailbox is not read), ${answering}. In the panel and in Chat, your mailbox is one of the mail accounts: list_mail_accounts marks it yours: true, and search_mail and read_mail read it when you name it (account: "${address}"). When the user asks about "your inbox" or mail sent to you, look there; "my inbox" is the user's own accounts.`,
+      `- You also have your own FreeFlow calendar, separate from the user's: the meetings you are invited to are on it. list_calendars lists it marked yours: true. Read it by naming its id in list_events' calendars (list_events alone reads the user's calendars), and put an event on it with create_event's calendar_id; respond_to_event answers an invitation on it by the event's id. When the user asks about "your calendar" or "your meetings", look there; "my calendar" is the user's own.`,
     ];
   }
 
@@ -268,18 +269,29 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * agent's account. Null for a shared agent (its turns already run as itself) and an agent with no address.
    */
   private async ownMailbox(caller: AccountCaller): Promise<{ fetch: (path: string, init?: RequestInit) => Promise<Response>; ids: Set<string>; accounts: Record<string, unknown>[] } | null> {
-    const id = this.state('agent_account_id'), ns = this.env.MAIL;
-    if (!ns || !id || !this.state('agent_address') || id === caller.account.id) return null;
-    const account = await this.directory<AccountDTO | null>('accountById', id).catch(() => null);
-    if (!account || account.state === 'removed' || account.state === 'suspended' || account.organizationId !== caller.account.organizationId) return null;
-    const user = await this.directory<UserDTO | null>('getUser', account.principalId, account.principalId).catch(() => null);
-    if (!user) return null;
-    const asAgent = { user, token: '', authKind: 'agent' as const, ip: '', organizationId: account.organizationId, account } as unknown as CallerContext;
+    const ns = this.env.MAIL;
+    const asAgent = ns ? await this.ownCaller(caller) : null;
+    if (!ns || !asAgent) return null;
+    const account = asAgent.account;
     const stub = ns.get(ns.idFromName(account.id));
     const fetch = (path: string, init?: RequestInit) => stub.handle(new Request(`${this.origin}${path}`, init), asAgent);
     const res = await fetch('/v1/mail/accounts');
     const accounts = res.ok ? (((await res.json()) as { accounts?: Record<string, unknown>[] }).accounts ?? []) : [];
     return { fetch, ids: new Set(accounts.map((a) => String(a.id))), accounts };
+  }
+
+  /**
+   * A personal agent's own account as a caller (agents.md §1.1), when the turn runs as its sponsor: for its own mailbox and
+   * calendar. Null for a shared agent (its turns already run as itself), an agent with no address, and an account gone.
+   */
+  private async ownCaller(caller: AccountCaller): Promise<AccountCaller | null> {
+    const id = this.state('agent_account_id');
+    if (!id || !this.state('agent_address') || id === caller.account.id) return null;
+    const account = await this.directory<AccountDTO | null>('accountById', id).catch(() => null);
+    if (!account || account.state === 'removed' || account.state === 'suspended' || account.organizationId !== caller.account.organizationId) return null;
+    const user = await this.directory<UserDTO | null>('getUser', account.principalId, account.principalId).catch(() => null);
+    if (!user) return null;
+    return { user, token: '', authKind: 'agent' as const, ip: '', organizationId: account.organizationId, account } as unknown as AccountCaller;
   }
 
   /** The turn's caller as an installed app sees it (user-apps.md §5): its account, and the agent it acts through. */
@@ -560,8 +572,22 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const caller = who?.caller;
     if (!CALENDAR || !ORG || !caller) return undefined;
     const organizationId = caller.account.organizationId || caller.organizationId;
+    // A personal agent's own calendar (agents.md §1.1), beside its sponsor's: its own account's Calendar object, as itself.
+    const agentId = this.state('agent_account_id'), address = this.state('agent_address');
+    const yours = agentId && address && agentId !== caller.account.id
+      ? {
+        accountId: agentId,
+        address,
+        calendar: async (path: string, init?: RequestInit) => {
+          const asAgent = await this.ownCaller(caller);
+          if (!asAgent) return Response.json({ error: { code: 'not_found', message: 'your own calendar is not available' } }, { status: 404 });
+          return calendarRequest({ CALENDAR, ORG }, new Request(`${this.origin}${path}`, init), asAgent, asAgent.user!.id);
+        },
+      }
+      : undefined;
     return {
       calendar: (path, init) => calendarRequest({ CALENDAR, ORG }, new Request(`${this.origin}${path}`, init), caller, userId),
+      ...(yours ? { yours } : {}),
       origin: this.origin,
       member: async (address) => {
         const a = await this.directory<AccountDTO | null>('accountByAddress', address).catch(() => null);

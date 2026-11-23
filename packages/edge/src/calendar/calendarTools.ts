@@ -30,6 +30,11 @@ export interface CalendarToolContext {
   origin: string;
   /** An account of the caller's organization by address, through the directory (share_calendar's `account`); null for anyone else. */
   member?: (address: string) => Promise<{ accountId: string; name: string } | null>;
+  /**
+   * A personal agent's own calendar (agents.md §1.1), when the turn runs as its sponsor: its account and its own Calendar
+   * object. A request naming one of its native calendars goes there; list_calendars lists them marked `yours`.
+   */
+  yours?: { accountId: string; address: string; calendar: CalendarFetch };
 }
 
 const DAY = 86_400_000;
@@ -51,8 +56,23 @@ export function checkEventId(id: unknown): string {
 
 // ---- the Calendar object -------------------------------------------------------------------------------------------
 
+/** Whether a request names one of the agent's own native calendars (in the path, the `calendars` query or the body). */
+function namesYours(ctx: CalendarToolContext, path: string, body?: unknown): boolean {
+  const mine = ctx.yours?.accountId;
+  if (!mine) return false;
+  const ids: string[] = [];
+  const named = /^\/(?:events|calendars)\/([^/?]+)/.exec(path)?.[1];
+  if (named) { try { ids.push(decodeURIComponent(named).split(':')[0]!); } catch { /* not an id */ } }
+  const query = path.split('?')[1];
+  if (query) ids.push(...(new URLSearchParams(query).get('calendars') ?? '').split(','));
+  const cal = (body as { calendarId?: unknown } | undefined)?.calendarId;
+  if (typeof cal === 'string') ids.push(cal);
+  return ids.some((id) => nativeOwnerOf(id.trim()) === mine);
+}
+
 async function call<T>(ctx: CalendarToolContext, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await ctx.calendar(`/v1/calendar${path}`, { method, ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+  const fetch = namesYours(ctx, path, body) ? ctx.yours!.calendar : ctx.calendar;
+  const res = await fetch(`/v1/calendar${path}`, { method, ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
   if (res.ok) return (await res.json()) as T;
   const err = (await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
   const message = err?.error?.message ?? `the calendar answered ${res.status}`;
@@ -71,10 +91,16 @@ const calendarsOf = async (ctx: CalendarToolContext) => (await call<{ calendars:
 /** A native calendar another member shared with the caller (`GET /v1/calendar/shared`). */
 export interface SharedCalendar { id: string; name: string; color: string; role: 'viewer' | 'editor' | 'manager'; ownerAccountId: string; grantedBy: string; url: string }
 const sharedOf = async (ctx: CalendarToolContext) => (await call<{ calendars?: SharedCalendar[] }>(ctx, 'GET', '/shared')).calendars ?? [];
+/** The agent's own calendars (`yours`), none when there is no such calendar or it cannot be read. */
+async function yoursOf(ctx: CalendarToolContext): Promise<CalendarInfo[]> {
+  if (!ctx.yours) return [];
+  const res = await ctx.yours.calendar('/v1/calendar/calendars', { method: 'GET' }).catch(() => null);
+  return res?.ok ? (((await res.json()) as { calendars?: CalendarInfo[] }).calendars ?? []).filter((c) => nativeOwnerOf(c.id) === ctx.yours!.accountId) : [];
+}
 
 /** A calendar as the tools name it: whether it is a FreeFlow (native) one, and the user's role on it. */
 export type CalendarRole = 'owner' | 'manager' | 'editor' | 'viewer';
-interface CalendarRef { id: string; name: string; native: boolean; role: CalendarRole; shared?: true }
+interface CalendarRef { id: string; name: string; native: boolean; role: CalendarRole; shared?: true; yours?: true }
 /** The user's role on one of their own calendars: a connected one shared into their account by its server can be read-only. */
 const ownRole = (c: CalendarInfo): CalendarRole => (c.role === 'reader' ? 'viewer' : c.role === 'writer' ? 'editor' : 'owner');
 
@@ -83,12 +109,13 @@ const ownRole = (c: CalendarInfo): CalendarRole => (c.role === 'reader' ? 'viewe
  * by id, for naming an event's calendar. An error saying how to connect one when there are none.
  */
 async function calendarRefs(ctx: CalendarToolContext, withShared: boolean): Promise<{ own: CalendarInfo[]; accounts: CalendarAccount[]; shared: SharedCalendar[]; byId: Map<string, CalendarRef> }> {
-  const [accounts, own, shared] = await Promise.all([accountsOf(ctx), calendarsOf(ctx), withShared ? sharedOf(ctx).catch(() => [] as SharedCalendar[]) : Promise.resolve([] as SharedCalendar[])]);
-  if (!own.length && !shared.length) throw new CalendarToolError(`No calendar is connected. The user can connect one (Google, iCloud, Fastmail or any CalDAV server) in FreeFlow Calendar at ${ctx.origin}/calendar.`);
+  const [accounts, own, shared, yours] = await Promise.all([accountsOf(ctx), calendarsOf(ctx), withShared ? sharedOf(ctx).catch(() => [] as SharedCalendar[]) : Promise.resolve([] as SharedCalendar[]), withShared ? yoursOf(ctx) : Promise.resolve([] as CalendarInfo[])]);
+  if (!own.length && !shared.length && !yours.length) throw new CalendarToolError(`No calendar is connected. The user can connect one (Google, iCloud, Fastmail or any CalDAV server) in FreeFlow Calendar at ${ctx.origin}/calendar.`);
   const kind = new Map(accounts.map((a) => [a.id, a.kind]));
   const byId = new Map<string, CalendarRef>();
   for (const c of own) byId.set(c.id, { id: c.id, name: c.name, native: kind.get(c.accountId) === 'native', role: ownRole(c) });
   for (const c of shared) if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name: c.name, native: true, role: c.role, shared: true });
+  for (const c of yours) if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name: c.name, native: true, role: 'owner', yours: true });
   return { own, accounts, shared, byId };
 }
 /** Whether a calendar id is none of the user's own. */
@@ -102,7 +129,7 @@ function defaultNative(own: CalendarInfo[], accounts: CalendarAccount[]): Calend
   return own.find((c) => c.isDefault && native.has(c.accountId)) ?? own.find((c) => native.has(c.accountId));
 }
 
-const calendarOut = (r: CalendarRef | undefined, id: string) => (r ? { id: r.id, name: r.name, native: r.native, ...(r.role !== 'owner' ? { role: r.role } : {}), ...(r.role === 'viewer' ? { read_only: true } : {}) } : { id });
+const calendarOut = (r: CalendarRef | undefined, id: string) => (r ? { id: r.id, name: r.name, native: r.native, ...(r.yours ? { yours: true } : {}), ...(r.role !== 'owner' ? { role: r.role } : {}), ...(r.role === 'viewer' ? { read_only: true } : {}) } : { id });
 
 /**
  * Who an event's write reached, from the event and the answer: the members of the organization it was scheduled to by
@@ -324,21 +351,22 @@ export const CALENDAR_TOOLS: CalendarTool[] = [
   {
     name: 'list_calendars',
     title: 'List calendars',
-    description: "The user's calendars: their own FreeFlow calendar (native: true, scheduled between members by FreeFlow), the ones they connected (Google, iCloud, Fastmail and other CalDAV accounts; native: false), and the FreeFlow calendars other members shared with them (shared: true). Each with its id, name, account, the user's role on it (owner, manager, editor or viewer; read_only when they can only view it), whether it is shown, and which is the default for new events.",
+    description: "The user's calendars: their own FreeFlow calendar (native: true, scheduled between members by FreeFlow), the ones they connected (Google, iCloud, Fastmail and other CalDAV accounts; native: false), and the FreeFlow calendars other members shared with them (shared: true). When you are the user's assistant with your own calendar, it is listed too, marked yours: true (name it in list_events' calendars, or as create_event's calendar_id). Each with its id, name, account, the user's role on it (owner, manager, editor or viewer; read_only when they can only view it), whether it is shown, and which is the default for new events.",
     shape: {},
     scopes: ['calendar:read'],
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     async run(ctx) {
-      const [accounts, cals, shared] = await Promise.all([accountsOf(ctx), calendarsOf(ctx), sharedOf(ctx).catch(() => [] as SharedCalendar[])]);
+      const [accounts, cals, shared, yours] = await Promise.all([accountsOf(ctx), calendarsOf(ctx), sharedOf(ctx).catch(() => [] as SharedCalendar[]), yoursOf(ctx)]);
       const byId = new Map(accounts.map((a) => [a.id, a]));
       const own = new Set(cals.map((c) => c.id));
       return {
         calendars: [
           ...cals.map((c) => ({ id: c.id, name: c.name, account: byId.get(c.accountId)?.email ?? null, native: byId.get(c.accountId)?.kind === 'native', role: ownRole(c), ...(c.role === 'reader' ? { read_only: true } : {}), ...(c.hidden ? { hidden: true } : {}), ...(c.isDefault ? { default: true } : {}), ...(c.timezone ? { timezone: c.timezone } : {}) })),
           ...shared.filter((c) => !own.has(c.id)).map((c) => ({ id: c.id, name: c.name, native: true, shared: true, role: c.role, ...(c.role === 'viewer' ? { read_only: true } : {}), owner_account: c.ownerAccountId })),
+          ...yours.filter((c) => !own.has(c.id)).map((c) => ({ id: c.id, name: c.name, account: ctx.yours!.address, native: true, yours: true, role: 'owner' as const, ...(c.timezone ? { timezone: c.timezone } : {}) })),
         ],
         ...(accounts.some((a) => a.status !== 'ok') ? { accounts_needing_attention: accounts.filter((a) => a.status !== 'ok').map((a) => ({ email: a.email, status: a.status })) } : {}),
-        ...(cals.length || shared.length ? {} : { note: `No calendar is connected. The user can connect one in FreeFlow Calendar at ${ctx.origin}/calendar.` }),
+        ...(cals.length || shared.length || yours.length ? {} : { note: `No calendar is connected. The user can connect one in FreeFlow Calendar at ${ctx.origin}/calendar.` }),
       };
     },
   },
