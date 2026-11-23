@@ -33,10 +33,10 @@ import type { Caller as DocsCaller } from '@flow/docs/server/runtime/workerd/htt
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
 import type { AgentService, ModelCall } from '@flow/docs/server/agent/agent.ts';
 import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '@flow/docs/server/agent/settings.ts';
-import { ORG_ROW, OrgModelSettings, orgModelKey, type OrgModel } from './orgModel';
+import { cleanModel, ORG_MODELS_DDL, ORG_ROW, OrgModelList, OrgModelSettings, orgModelKey, type ModelRow, type OrgModel } from './orgModel';
 import { appToolsFor, runAppTool, type AppToolCaller } from '../registry/userApps';
 import type { AppToolOffer } from '@flow/docs/shared/agent/protocol.ts';
-import type { AssistantSettings } from '@flow/shared/assistant';
+import { modelEntryLabel, type AssistantSettings, type ModelEntryInput, type OrgModelsDTO } from '@flow/shared/assistant';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentContext, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall, type ClientToolResult } from '@flow/docs/shared/agent/protocol.ts';
@@ -113,9 +113,11 @@ export const ASSISTANT_MIGRATIONS: string[][] = [
   MEMORY_DDL,
   // Email waiting for the person's click (mailApprovals.ts).
   MAIL_APPROVALS_DDL,
+  // The organization's model list (orgModel.ts; only the `org:<id>` object fills it).
+  ORG_MODELS_DDL,
 ];
 /** Every table, for exportRows. */
-export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state', 'agent_memory_files', 'mail_approvals'] as const;
+export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state', 'agent_memory_files', 'mail_approvals', 'org_models'] as const;
 /** The tables importRows takes whole; a conversation comes with its messages (importChat). */
 const IMPORTED = ['agent_usage', 'assistant_settings'] as const;
 
@@ -358,13 +360,18 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** Sets the definition; the loop is remade so the next turn's prompt carries the new instructions. */
-  setDefinition(d: { name?: string; instructions?: string }): AgentDefinition {
+  setDefinition(d: { name?: string; instructions?: string; modelId?: string | null }): AgentDefinition {
     const now = this.definition();
+    // The model it is pinned to (task #26): an entry of the organization's list, or null for the default.
+    const modelId = d.modelId === undefined ? (now.modelId ?? null) : d.modelId || null;
     const next: AgentDefinition = {
       name: (d.name ?? now.name).trim().slice(0, 80) || now.name,
       instructions: (d.instructions ?? now.instructions).trim().slice(0, MAX_INSTRUCTIONS),
+      ...(modelId ? { modelId } : {}),
       updatedAt: new Date().toISOString(),
     };
+    // A new pin is asked for at the next turn, not a minute later.
+    if (modelId !== (now.modelId ?? null)) this.orgModelAt = 0;
     this.setState('definition', JSON.stringify(next));
     // A new name is the directory's too (the routes rename both), so the prompt takes it at once.
     if (d.name !== undefined) this.setState('definition_default_name', next.name);
@@ -600,7 +607,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** A hosted agent's definition, set from the Admin app (agents.md §6): the runtime remakes its loop for the next turn. */
-  async updateDefinition(d: { name?: string; instructions?: string }): Promise<AgentDefinition> {
+  async updateDefinition(d: { name?: string; instructions?: string; modelId?: string | null }): Promise<AgentDefinition> {
     return this.setDefinition(d);
   }
 
@@ -1110,7 +1117,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private async useOrgModel(organizationId: string): Promise<void> {
     if (this.orgModelOf === organizationId && Date.now() - this.orgModelAt < 60_000) return;
     try {
-      const model = await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(orgModelKey(organizationId))).orgModel();
+      // The entry this agent is pinned to (task #26), if any: the organization's object answers with it or its default.
+      const model = await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(orgModelKey(organizationId))).orgModel(this.definition().modelId ?? null);
       withDocsContext(this.context, () => { this.service().settings.current = model; });
       this.orgModelOf = organizationId;
       this.orgModelAt = Date.now();
@@ -1125,17 +1133,102 @@ export class Assistant extends DurableObject<AssistantEnv> {
     if (!settings.current?.choice && !settings.builtIn) throw new lib.AgentError(400, NO_MODEL);
   }
 
-  /** In the `org:<id>` object: the organization's model, for the runtimes (its keys opened). */
-  async orgModel(): Promise<OrgModel> {
+  /** In the `org:<id>` object: its settings store (the keys), and its model list seeded from the model it had before. */
+  private orgStore(): { base: AssistantSettingsStore; list: OrgModelList; ready: (r: ModelRow) => boolean } {
+    const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
+    // Local development: the first time, the organization runs on the key in .dev.vars (none of production's).
+    if (this.env.DEV_ADOPT_MODEL_KEYS === '1') {
+      const adopted = base.adoptFromEnvironment(ORG_ROW, { ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: this.env.OPENAI_API_KEY, OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY });
+      if (adopted) console.log(`[assistant] local development: the organization runs on the ${adopted} key from .dev.vars`);
+    }
+    const list = new OrgModelList(this.sql);
+    list.seed(base.get(ORG_ROW));
+    const ready = (r: ModelRow) => (r.provider === 'default' ? base.builtIn : base.keyOf(ORG_ROW, r.provider) !== null);
+    return { base, list, ready };
+  }
+
+  /**
+   * In the `org:<id>` object: the model an agent runs on, for the runtimes (its key opened). `pin`: the list entry the
+   * agent is pinned to (task #26); one that is gone, or whose provider has no key, falls back to the default.
+   */
+  async orgModel(pin: string | null = null): Promise<OrgModel> {
     return withDocsContext(this.context, () => {
-      const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
-      // Local development: the first time, the organization runs on the key in .dev.vars (none of production's).
-      if (this.env.DEV_ADOPT_MODEL_KEYS === '1') {
-        const adopted = base.adoptFromEnvironment(ORG_ROW, { ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: this.env.OPENAI_API_KEY, OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY });
-        if (adopted) console.log(`[assistant] local development: the organization runs on the ${adopted} key from .dev.vars`);
-      }
-      return { shown: base.get(ORG_ROW), choice: base.choice(ORG_ROW), braveKey: base.braveKey(ORG_ROW), openaiKey: base.openaiKey(ORG_ROW) };
+      const { base, list, ready } = this.orgStore();
+      const { entry, missing } = list.resolve(pin, ready);
+      const saved = base.get(ORG_ROW);
+      const common = { braveKey: base.braveKey(ORG_ROW), openaiKey: base.openaiKey(ORG_ROW), entryId: entry?.id ?? null, pinMissing: missing };
+      if (!entry || entry.provider === 'default') return { shown: { ...saved, provider: 'default' }, choice: null, ...common };
+      const p = entry.provider;
+      const shown: AssistantSettings = { ...saved, provider: p, ...(p === 'anthropic' ? { anthropicModel: entry.model as AssistantSettings['anthropicModel'] } : p === 'openai' ? { openaiModel: entry.model as AssistantSettings['openaiModel'] } : { openrouterModel: entry.model }) };
+      return { shown, choice: { provider: p, apiKey: base.keyOf(ORG_ROW, p)!, model: entry.model }, ...common };
     });
+  }
+
+  /** In the `org:<id>` object: the model list, its default and the saved keys (masked), for Admin. */
+  async orgModels(): Promise<OrgModelsDTO> {
+    return withDocsContext(this.context, () => {
+      const { base, list, ready } = this.orgStore();
+      const s = base.get(ORG_ROW);
+      return {
+        entries: list.rows().map((r) => ({ ...r, label: modelEntryLabel(r), ready: ready(r) })),
+        defaultId: list.defaultId(),
+        builtIn: base.builtIn,
+        keys: { anthropic: s.anthropicKey, openai: s.openaiKey, openrouter: s.openrouterKey, brave: s.braveKey },
+      };
+    });
+  }
+
+  /**
+   * In the `org:<id>` object: an admin adds an entry. A key given with it is checked against that model and saved (it
+   * replaces the provider's saved one); without one, the provider's saved key is checked the same way.
+   */
+  async addOrgModel(input: ModelEntryInput): Promise<{ ok: true; models: OrgModelsDTO; id: string } | { ok: false; message: string }> {
+    const provider = input?.provider;
+    if (provider !== 'default' && provider !== 'anthropic' && provider !== 'openai' && provider !== 'openrouter') return { ok: false, message: 'Choose a provider.' };
+    const model = cleanModel(provider, input.model);
+    if (model === null) return { ok: false, message: provider === 'openrouter' ? 'Enter an OpenRouter model id, such as anthropic/claude-sonnet-5.5.' : 'Choose one of the listed models.' };
+    if (provider === 'default' && !this.env.ANTHROPIC_API_KEY) return { ok: false, message: 'This server has no built-in model.' };
+    try {
+      if (provider !== 'default') {
+        const checks = this.keyChecks();
+        const key = typeof input.key === 'string' && input.key.trim() ? input.key.trim() : undefined;
+        const store = withDocsContext(this.context, () => this.orgStore().base);
+        // The settings store checks and seals the key; its own provider choice no longer decides anything (the list does).
+        await withDocsContext(this.context, () => store.update(ORG_ROW, { provider, [`${provider}Model`]: model, ...(key ? { [`${provider}Key`]: key } : {}) }, checks.key, checks.search));
+      }
+      const id = withDocsContext(this.context, () => this.orgStore().list.add(provider, model, !!input.makeDefault));
+      return { ok: true, id, models: await this.orgModels() };
+    } catch (e) {
+      if (e instanceof SettingsError) return { ok: false, message: e.message };
+      throw e;
+    }
+  }
+
+  /** In the `org:<id>` object: an admin removes an entry, or makes one the default. */
+  async changeOrgModel(id: string, change: 'remove' | 'default'): Promise<{ ok: true; models: OrgModelsDTO } | { ok: false; message: string }> {
+    const done = withDocsContext(this.context, () => {
+      const { list } = this.orgStore();
+      return change === 'remove' ? list.remove(id) : list.setDefault(id);
+    });
+    return done ? { ok: true, models: await this.orgModels() } : { ok: false, message: 'That model is not in the list.' };
+  }
+
+  /** In the `org:<id>` object: an admin removes a provider's saved key (Brave's too); entries on it fall back to the default. */
+  async removeOrgKey(provider: 'anthropic' | 'openai' | 'openrouter' | 'brave'): Promise<OrgModelsDTO> {
+    await withDocsContext(this.context, () => this.orgStore().base.update(ORG_ROW, { provider: 'default', [`${provider}Key`]: null }, async () => undefined));
+    return this.orgModels();
+  }
+
+  /** In the `org:<id>` object: a new Brave Search key, checked first. */
+  async setOrgBraveKey(key: string): Promise<{ ok: true; models: OrgModelsDTO } | { ok: false; message: string }> {
+    try {
+      const checks = this.keyChecks();
+      await withDocsContext(this.context, () => this.orgStore().base.update(ORG_ROW, { provider: 'default', braveKey: key }, checks.key, checks.search));
+      return { ok: true, models: await this.orgModels() };
+    } catch (e) {
+      if (e instanceof SettingsError) return { ok: false, message: e.message };
+      throw e;
+    }
   }
 
   /** In the `org:<id>` object: the organization's model, as shown (masked). */
@@ -1147,8 +1240,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
   async updateOrgSettings(body: Partial<AssistantSettingsUpdate>): Promise<{ ok: true; settings: AssistantSettings } | { ok: false; message: string }> {
     try {
       const checks = this.keyChecks();
-      const settings = await withDocsContext(this.context, () => new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false }).update(ORG_ROW, body, checks.key, checks.search));
-      return { ok: true, settings };
+      const settings = await withDocsContext(this.context, () => this.orgStore().base.update(ORG_ROW, body, checks.key, checks.search));
+      // The single-model form (and older clients): what it chose becomes the list's default.
+      if (body.provider === 'default' ? settings.builtIn : body.provider && body.provider !== 'claude-agent') {
+        const p = body.provider as ModelRow['provider'];
+        const model = p === 'default' ? '' : p === 'anthropic' ? settings.anthropicModel : p === 'openai' ? settings.openaiModel : settings.openrouterModel;
+        withDocsContext(this.context, () => this.orgStore().list.add(p, model, true));
+      }
+      return { ok: true, settings: (await this.orgModel()).shown };
     } catch (e) {
       if (e instanceof SettingsError) return { ok: false, message: e.message };
       throw e;
@@ -1271,11 +1370,12 @@ export class Assistant extends DurableObject<AssistantEnv> {
       return c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() });
     });
     app.put('/api/agent/definition', async (c) => {
-      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown };
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown; modelId?: unknown };
       if (body.name !== undefined && typeof body.name !== 'string') return c.json({ error: 'name: a string' }, 400);
+      if (body.modelId !== undefined && body.modelId !== null && (typeof body.modelId !== 'string' || body.modelId.length > 64)) return c.json({ error: 'modelId: an id, or null' }, 400);
       if (body.instructions !== undefined && typeof body.instructions !== 'string') return c.json({ error: 'instructions: a string' }, 400);
       if (typeof body.instructions === 'string' && body.instructions.length > MAX_INSTRUCTIONS) return c.json({ error: `instructions: at most ${MAX_INSTRUCTIONS} characters` }, 400);
-      return c.json({ definition: this.setDefinition(body as { name?: string; instructions?: string }) });
+      return c.json({ definition: this.setDefinition(body as { name?: string; instructions?: string; modelId?: string | null }) });
     });
 
     app.put('/api/settings/assistant', async (c) => {

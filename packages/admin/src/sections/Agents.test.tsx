@@ -1,6 +1,6 @@
 // Agents (docs/specs/agents.md §2), against a fetch that answers the suite's API: shared agents from the roster with their
 // sponsors, personal agents from the accounts with theirs, and removing a personal agent through its account.
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountDTO, WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
@@ -17,6 +17,7 @@ const account = (name: string, extra: Partial<AccountDTO> = {}): AccountDTO => (
   id: `a-${name.toLowerCase().replace(/\s+/g, '-')}`, principalId: `u-${name.toLowerCase()}`, organizationId: 'o1', address: `${name.toLowerCase()}@acme.freeflow.im`, displayName: name,
   role: 'member', kind: 'native', state: 'active', hosted: true, createdAt: '', ...extra,
 });
+const MODELS = { entries: [{ id: 'e-sonnet', provider: 'anthropic', model: 'claude-sonnet-5-5', label: 'Anthropic · Claude Sonnet 5.5', ready: true }, { id: 'e-luna', provider: 'openai', model: 'gpt-6-luna', label: 'OpenAI · Luna', ready: true }], defaultId: 'e-sonnet', builtIn: true, keys: { anthropic: '••••abcd', openai: '••••wxyz', openrouter: null, brave: null } };
 let calls: { method: string; path: string; body?: unknown }[];
 let accounts: AccountDTO[];
 
@@ -37,6 +38,8 @@ beforeEach(() => {
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
     if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' }), member('Ada', { isAgent: true, sponsorId: 'u-ann', kind: 'personal_agent', agentRuntime: 'hosted' })] });
     if (path.endsWith('/accounts')) return json({ accounts });
+    if (path === '/v1/workspaces/o1/assistant/models' && method === 'GET') return json(MODELS);
+    if (path.startsWith('/v1/workspaces/o1/assistant/models')) return json({ ok: true, models: { ...MODELS, defaultId: 'e-luna' } });
     if (path === '/v1/workspaces/o1/assistant/model') return json({ settings: { provider: method === 'PUT' ? 'anthropic' : 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: method === 'PUT' ? '••••abcd' : null, openaiKey: null, openrouterKey: null, braveKey: null } });
     if (method === 'POST' && path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-pip', accountId: 'a-pip', displayName: 'Pip', mode: 'shared', self: false }, definition: { name: 'Pip', instructions: 'Be brief.', updatedAt: '2026-11-11T00:00:00.000Z' } }, 201);
     if (path.endsWith('/agents/u-omni/definition')) return json({ definition: { name: 'Omni', instructions: method === 'PUT' ? 'Updated.' : 'Help the team.', updatedAt: null }, mayEdit: true });
@@ -90,14 +93,27 @@ describe('the Agents section', () => {
     expect(calls.find((c) => c.method === 'PUT' && c.path.endsWith('/definition'))?.body).toEqual({ instructions: 'Help the team briefly.' });
   });
 
-  it('sets the model every agent in the organization runs on', async () => {
+  it('lists the organization’s models with the default, adds one, and makes another the default (task #26)', async () => {
     mount();
-    const pick = (await screen.findByTestId('assistant-provider')) as HTMLSelectElement;
-    await waitFor(() => expect(pick.value).toBe('default'));
-    fireEvent.change(pick, { target: { value: 'anthropic' } });
-    fireEvent.change(await screen.findByTestId('assistant-key'), { target: { value: 'sk-ant-test-abcd' } });
-    fireEvent.click(screen.getByTestId('assistant-model-save'));
-    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/model' && (c.body as { provider: string; anthropicKey: string }).provider === 'anthropic' && (c.body as { anthropicKey: string }).anthropicKey === 'sk-ant-test-abcd')).toBe(true));
+    await screen.findByTestId('model-Anthropic · Claude Sonnet 5.5');
+    expect(within(screen.getByTestId('model-Anthropic · Claude Sonnet 5.5')).getByTestId('model-default-badge')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('model-make-default-OpenAI · Luna'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/models/e-luna/default')).toBe(true));
+    fireEvent.change(screen.getByTestId('model-add-provider'), { target: { value: 'openrouter' } });
+    fireEvent.change(screen.getByTestId('model-add-model'), { target: { value: 'qwen/qwen3.8-max-0902' } });
+    fireEvent.change(screen.getByTestId('model-add-key'), { target: { value: 'sk-or-test' } });
+    fireEvent.click(screen.getByTestId('model-add-save'));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/assistant/models')?.body).toEqual({ provider: 'openrouter', model: 'qwen/qwen3.8-max-0902', key: 'sk-or-test' }));
+  });
+
+  it('pins a hosted agent to one of the models from its editor (task #26)', async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId('agent-instructions-Omni'));
+    const pick = (await screen.findByTestId('agent-model-Omni')) as HTMLSelectElement;
+    await waitFor(() => expect(pick.disabled).toBe(false));
+    fireEvent.change(pick, { target: { value: 'e-luna' } });
+    fireEvent.click(screen.getByTestId('agent-instructions-save-Omni'));
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT' && c.path.endsWith('/agents/u-omni/definition'))?.body).toEqual({ modelId: 'e-luna' }));
   });
 
   it('removes a personal agent through its account, after a confirmation', async () => {

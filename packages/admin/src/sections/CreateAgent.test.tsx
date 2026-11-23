@@ -10,6 +10,7 @@ const org: WorkspaceDTO = {
   id: 'o1', slug: 'acme', name: 'Acme', createdBy: 'u-ann', createdAt: '2026-01-01T00:00:00.000Z', sidebarColor: 'violet', avatarUrl: null, googleSelfRegisterDomain: null, role: 'member',
 };
 const agent = (name: string, self = false): UsableAgentDTO => ({ id: `u-${name.toLowerCase()}`, accountId: `a-${name.toLowerCase()}`, displayName: name, mode: 'personal', self });
+const MODELS = { entries: [{ id: 'e-sonnet', provider: 'anthropic', model: 'claude-sonnet-5-5', label: 'Anthropic · Claude Sonnet 5.5', ready: true }, { id: 'e-luna', provider: 'openai', model: 'gpt-6-luna', label: 'OpenAI · Luna', ready: true }], defaultId: 'e-sonnet', builtIn: true, keys: { anthropic: '••••abcd', openai: '••••wxyz', openrouter: null, brave: null } };
 let calls: { method: string; path: string; body?: unknown }[];
 let mine: UsableAgentDTO[];
 
@@ -22,6 +23,7 @@ beforeEach(() => {
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
     calls.push({ method, path, body });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
+    if (path === '/v1/workspaces/o1/assistant/models') return json(MODELS);
     if (path === '/v1/workspaces/o1/agents/mine') return json({ agents: mine, limit: 5 });
     if (method === 'POST' && path === '/v1/workspaces/o1/agents/personal') {
       const made = agent((body as { name: string }).name);
@@ -63,6 +65,21 @@ describe('your private agents', () => {
     expect(calls.find((c) => c.method === 'POST')).toEqual({ method: 'POST', path: '/v1/workspaces/o1/agents/personal', body: { name: 'Rex', instructions: 'Keep notes.' } });
     expect(screen.getByTestId('create-agent-made').textContent).toContain('Only you can ask it');
     await screen.findByTestId('my-agent-Rex');
+  });
+
+  it('pins the new agent to one of the organization’s models, or leaves it on the default (task #26)', async () => {
+    mount();
+    const pick = (await screen.findByTestId('create-agent-model')) as HTMLSelectElement;
+    await waitFor(() => expect(pick.options[0]?.textContent).toBe('Organization default (Anthropic · Claude Sonnet 5.5)'));
+    expect([...pick.options].map((o) => o.value)).toEqual(['', 'e-sonnet', 'e-luna']);
+    fireEvent.change(screen.getByTestId('create-agent-name'), { target: { value: 'Quill' } });
+    fireEvent.change(pick, { target: { value: 'e-luna' } });
+    fireEvent.click(screen.getByTestId('create-agent-make'));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/agents/personal')?.body).toEqual({ name: 'Quill', modelId: 'e-luna' }));
+    // Left on the default, no pin is sent.
+    fireEvent.change(screen.getByTestId('create-agent-name'), { target: { value: 'Wren' } });
+    fireEvent.click(screen.getByTestId('create-agent-make'));
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/agents/personal')[1]?.body).toEqual({ name: 'Wren' }));
   });
 
   it('gives the new agent the picture picked in the form, once it is made', async () => {

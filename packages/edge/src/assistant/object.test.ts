@@ -225,6 +225,60 @@ describe('the Assistant object', () => {
     expect(await keeper.updateOrgSettings({ provider: 'claude-agent' })).toMatchObject({ ok: false });
   });
 
+  it('keeps a list of the organization’s models with a default, and runs a pinned agent on its pin or else the default (task #26)', async () => {
+    const keeper = assistant('org:org-list');
+    // Seeded from the model it had before: here the built-in one, as the default.
+    let models = await keeper.orgModels();
+    expect(models.entries).toEqual([expect.objectContaining({ provider: 'default', label: 'The built-in model', ready: true })]);
+    const builtIn = models.entries[0]!.id;
+    expect(models.defaultId).toBe(builtIn);
+    // Two more, each checked and keyed; the second made the default.
+    const opus = await keeper.addOrgModel({ provider: 'anthropic', model: 'claude-opus-5-5', key: 'sk-ant-0123456789abcdef' });
+    expect(opus).toMatchObject({ ok: true });
+    const luna = await keeper.addOrgModel({ provider: 'openai', model: 'gpt-6-luna', key: 'sk-test-0123456789abcdef', makeDefault: true });
+    if (!opus.ok || !luna.ok) throw new Error('not added');
+    expect(luna.models.defaultId).toBe(luna.id);
+    expect(luna.models.entries.map((e) => e.label)).toEqual(['The built-in model', 'Anthropic · Claude Opus 5.5', 'OpenAI · Luna']);
+    expect(luna.models.keys.anthropic).toMatch(/cdef$/);
+    // A model not in the catalogue, and a provider with no key, are refused.
+    expect(await keeper.addOrgModel({ provider: 'anthropic', model: 'claude-9' })).toMatchObject({ ok: false });
+    expect(await keeper.addOrgModel({ provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5' })).toMatchObject({ ok: false, message: expect.stringContaining('OpenRouter API key') });
+    // No pin: the default. A pin: its entry. A pin to an entry that is gone: the default again.
+    expect((await keeper.orgModel()).choice).toEqual({ provider: 'openai', apiKey: 'sk-test-0123456789abcdef', model: 'gpt-6-luna' });
+    expect(await keeper.orgModel(opus.id)).toMatchObject({ choice: { provider: 'anthropic', apiKey: 'sk-ant-0123456789abcdef', model: 'claude-opus-5-5' }, entryId: opus.id, pinMissing: false });
+    expect((await keeper.orgModel(opus.id)).shown).toMatchObject({ provider: 'anthropic', anthropicModel: 'claude-opus-5-5' });
+    expect(await keeper.orgModel('gone')).toMatchObject({ choice: { model: 'gpt-6-luna' }, entryId: luna.id, pinMissing: true });
+    // A pinned entry whose key is removed falls back too; removing the default makes the first one left the default.
+    await keeper.removeOrgKey('anthropic');
+    expect(await keeper.orgModel(opus.id)).toMatchObject({ choice: { model: 'gpt-6-luna' }, pinMissing: true });
+    expect((await keeper.changeOrgModel(luna.id, 'remove')).ok).toBe(true);
+    models = await keeper.orgModels();
+    expect(models.defaultId).toBe(builtIn);
+    expect(await keeper.orgModel(opus.id)).toMatchObject({ choice: null, shown: { provider: 'default' }, entryId: builtIn });
+    expect(await keeper.changeOrgModel('nope', 'default')).toMatchObject({ ok: false });
+  });
+
+  it('seeds the list from the key-provider model an organization chose before the list (task #26)', async () => {
+    const keeper = assistant('org:org-legacy', { ANTHROPIC_API_KEY: undefined } as never);
+    // The old single-model form, as older clients still send it: it becomes the list's default.
+    expect(await keeper.updateOrgSettings({ provider: 'openrouter', openrouterKey: 'sk-or-0123456789abcdef', openrouterModel: 'qwen/qwen3.8-max-0902' })).toMatchObject({ ok: true, settings: { provider: 'openrouter' } });
+    const models = await keeper.orgModels();
+    expect(models.builtIn).toBe(false);
+    expect(models.entries).toEqual([expect.objectContaining({ provider: 'openrouter', model: 'qwen/qwen3.8-max-0902', ready: true })]);
+    expect(models.defaultId).toBe(models.entries[0]!.id);
+    expect(await keeper.addOrgModel({ provider: 'default' })).toMatchObject({ ok: false });
+  });
+
+  it('keeps an agent’s model pin on its definition (task #26)', async () => {
+    const a = assistant('acct-pin');
+    expect(a.setDefinition({ modelId: 'entry-1' }).modelId).toBe('entry-1');
+    // Other changes keep it; null clears it.
+    expect(a.setDefinition({ instructions: 'Be brief.' })).toMatchObject({ modelId: 'entry-1', instructions: 'Be brief.' });
+    expect(a.setDefinition({ modelId: null }).modelId).toBeUndefined();
+    const bad = await a.handle(req('PUT', '/api/agent/definition', { modelId: 7 }), CALLER, DOCS_CALLER);
+    expect(bad.status).toBe(400);
+  });
+
   it('keeps the agent’s definition, names it as the directory does by default, and puts its instructions in the prompt (agents.md §6)', async () => {
     const a = assistant('acct-1');
     let systems: string[] = [];

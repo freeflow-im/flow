@@ -285,6 +285,8 @@ export interface AgentDefinitionDTO {
   name: string;
   /** Lines added to the system prompt. */
   instructions: string;
+  /** The organization model entry it is pinned to; absent or null: the organization's default (it falls back to that too). */
+  modelId?: string | null;
   updatedAt: string | null;
 }
 

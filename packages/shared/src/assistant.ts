@@ -114,6 +114,48 @@ export interface AssistantSettingsUpdate {
   braveKey?: string | null;
 }
 
+// ---- The organization's models (task #26) ----------------------------------------------------------------------
+// An organization keeps a list of provider+model entries, one of them the default. An agent may be pinned to one entry
+// (its definition's `modelId`); a pin to an entry that is gone, or whose provider has no key, runs on the default.
+
+/** What an entry runs on: the platform's built-in model, or a provider on the organization's own key. */
+export type ModelEntryProvider = 'default' | KeyProvider;
+
+/** One of the organization's models. */
+export interface ModelEntry {
+  id: string;
+  provider: ModelEntryProvider;
+  /** The provider's model id; empty for the built-in model. */
+  model: string;
+  /** In words, as assistantModelLabel names it ("Anthropic · Claude Sonnet 5.5"). */
+  label: string;
+  /** Whether it can run: its provider's key is saved (the built-in model: the server has one). */
+  ready: boolean;
+}
+
+/** GET /v1/workspaces/:id/assistant/models: the list, the default, and the saved keys (masked). */
+export interface OrgModelsDTO {
+  entries: ModelEntry[];
+  /** The default entry's id; null when the list is empty (then the built-in model, if the server has one). */
+  defaultId: string | null;
+  builtIn: boolean;
+  keys: { anthropic: string | null; openai: string | null; openrouter: string | null; brave: string | null };
+}
+
+/** POST /v1/workspaces/:id/assistant/models: a new entry, with its provider's key when none is saved yet (or to replace it). */
+export interface ModelEntryInput {
+  provider: ModelEntryProvider;
+  model?: string;
+  key?: string;
+  /** Make it the default. The first entry always is. */
+  makeDefault?: boolean;
+}
+
+/** Names an entry the way an agent's model is named. */
+export function modelEntryLabel(e: { provider: ModelEntryProvider; model: string }): string {
+  return assistantModelLabel({ provider: e.provider, anthropicModel: e.model as AnthropicModelId, openaiModel: e.model as OpenAIModelId, openrouterModel: e.model, builtIn: true });
+}
+
 /** The pictures a person may give their assistant without uploading one (agents.md §1.1), served by the web client. */
 export const AGENT_AVATAR_PRESETS = ['sky', 'mint', 'sun', 'rose', 'grape', 'ocean', 'slate', 'lime'] as const;
 export type AgentAvatarPreset = (typeof AGENT_AVATAR_PRESETS)[number];
