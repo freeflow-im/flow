@@ -507,7 +507,7 @@ export async function handleRtkWebhook(event: {
     else if (event.event === 'meeting.ended') await endMeetingVisits(chat.id);
     return;
   }
-  if (event.event === 'meeting.participantLeft' && event.participant?.customParticipantId) {
+  if (event.event === 'meeting.participantLeft' && event.participant?.customParticipantId && !event.participant.customParticipantId.startsWith('agent:')) {
     await exitHuddle(m.channelId, event.participant.customParticipantId);
   } else if (event.event === 'meeting.ended') {
     await clearHuddle(m.channelId);
@@ -534,7 +534,8 @@ async function liveSession(m: MeetingRow): Promise<{ people: MeetingPersonDTO[];
   const rows = Array.isArray(list) ? list : (list?.participants ?? []);
   const people = rows
     .filter((p) => !p.left_at)
-    .map((p) => ({ userId: p.custom_participant_id ?? null, name: p.display_name ?? p.name ?? 'Someone' }));
+    // An agent's custom id is `agent:<user id>` (phase 5): Live now shows it by its user id like anyone.
+    .map((p) => ({ userId: p.custom_participant_id?.replace(/^agent:/, '') ?? null, name: p.display_name ?? p.name ?? 'Someone' }));
   // One person on two devices is one person in the list.
   const seen = new Set<string>();
   const unique = people.filter((p) => !p.userId || (!seen.has(p.userId) && !!seen.add(p.userId)));

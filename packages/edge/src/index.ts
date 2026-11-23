@@ -40,6 +40,7 @@ export { Calendar } from './calendar/object';
 export { Events } from './events/object';
 export { Assistant } from './assistant/object';
 export { Contacts } from './contacts/object';
+export { MeetingAgent } from './meet/agent';
 // Hosted user apps (src/apps/hosted.ts): the app's store, and the entrypoints its isolate is bound with (ctx.exports).
 export { AppStore, AppDb, AppFiles, AppSuite, AppEgress } from './apps/hosted';
 import type { HostedExports } from './apps/hosted';

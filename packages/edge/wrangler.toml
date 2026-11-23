@@ -191,6 +191,16 @@ class_name = "AppStore"
 tag = "v9"
 new_sqlite_classes = ["AppStore"]
 
+# Agents in Meet meetings (docs/specs/meetings.md §5.4, phase 5): one object per agent sent to a meeting
+# (`idFromName(<meeting_agents id>)`), holding RealtimeKit's agent WebSocket while people are in the room (src/meet/agent.ts).
+[[durable_objects.bindings]]
+name = "MEETING_AGENT"
+class_name = "MeetingAgent"
+
+[[migrations]]
+tag = "v10"
+new_sqlite_classes = ["MeetingAgent"]
+
 # Wake jobs (src/events/object.ts, platform.md §5.2): the Events object sends each job's check to flow-jobs, delayed by
 # JOBS_ACK_DELAY_SECONDS (default 60); the Worker's `queue` handler (src/index.ts) asks the Events object, which delivers
 # the job again (retry after 120 s × attempts) or parks it after three. A check that keeps throwing ends in flow-jobs-dlq,

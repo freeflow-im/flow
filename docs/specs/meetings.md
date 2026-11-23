@@ -144,13 +144,18 @@ Still open (proposed):
 
 ### 1.6 Agents (phase 5)
 
-- In a DM or group DM huddle, agents who are members join as **note takers**; in any meeting a host can add one
-  ("Add an agent" in People), and a person can send their own agent. The agent shows as "Agent" in People, reads the
-  live transcript and the chat, and answers @mentions in the chat.
+- Anyone in the room who is a member **sends an agent** ("Send an agent" in People): their own hosted agent or one of
+  the organization's hosted shared agents (not the admin agent). It shows as "Agent" in People, and anyone can send it
+  away. It is added to the meeting's chat and answers @mentions there. Built 2026-11-23 (Taskboard task 29).
+- Rulings 2026-11-23: **no live transcript** (live transcription would have to be on in every person's preset, so in
+  every meeting); **agents join only when sent** (no automatic note takers in DM huddles). Bridge (external) agents
+  cannot be sent yet: they do not see meeting chats.
 - An agent can **turn recording on itself** (R10). RTK agents have no meeting controls, so the agent asks our server,
   which starts it with the REST API; everyone sees the same badge.
 - At the end the agent reads the transcript and writes **Notes** (a summary and action items, as a Markdown doc) into
-  the meeting's folder, and links them in the meeting's chat.
+  the meeting's folder, and links them in the meeting's chat. The server gives the agent's model the transcript in one
+  headless turn and saves what it writes (`Notes`, or `Notes · <name>` when two agents were there), owned by whoever
+  sent it. A session where nobody spoke gets no notes.
 - RTK agents cannot hear, see or speak (capability matrix, 2026-11-22: audio and video "No (Planned)"); they work from
   the transcript.
 - **Deleted (R6)**: talking to an agent by voice in a DM huddle (the bridge's LiveKit voice session). The iOS
@@ -332,11 +337,13 @@ by hosts; RTK enforces the preset, the webhooks tell us the result.
 
 ### 5.4 Note takers
 
-`POST /v1/meetings/:id/agents` (and DM huddles, automatically) adds an `ff-agent` participant and starts a
-**MeetingAgent** DO per session and agent. It opens the Agent Participant WebSocket, subscribes to transcripts, chat
-and presence, and forwards them to the agent's runtime: the Assistant DO for hosted agents, the bridge's event stream
-for bridge agents. Replies go back as meeting chat. The DO leaves when the last person leaves (a connected agent keeps
-the session alive and is billed), with an alarm as a backstop.
+As built (2026-11-23): `POST /v1/meetings/:id/agents` adds an RTK participant with our `flow_agent` preset and custom
+id `agent:<user id>`, and starts a **MeetingAgent** DO per sending (`meeting_agents` row). It opens the Agent
+Participant WebSocket (`participant` subscription only), pings every 20 s from an alarm, and leaves (close 1000) when
+RTK's session has no person left, on `session.ended`, when sent away, or after 4 h (a connected agent keeps the session
+alive and is billed). Chat is the Flow meeting channel, so the agent's replies go through the normal Chat @mention
+path, not RTK chat. Notes: `meetingRecordings.saveTranscript` → `meetingAgents.writeAgentNotes` → Org
+`meetingNotesTurn` → Assistant `meetingNotes`.
 
 ### 5.5 Huddle details
 

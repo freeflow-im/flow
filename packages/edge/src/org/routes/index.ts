@@ -80,6 +80,7 @@ import * as hd from '../services/huddles.js';
 import * as hi from '../services/huddleInvites.js';
 import * as mt from '../services/meetings.js';
 import * as mr from '../services/meetingRecordings.js';
+import * as ma from '../services/meetingAgents.js';
 import * as msg from '../services/messages.js';
 import { searchMessages } from '../services/search.js';
 import { parseSearch } from '@flow/shared/search';
@@ -742,6 +743,22 @@ export function registerRoutes(app: FastifyInstance): void {
   app.delete('/v1/meetings/:id/recording', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     return mr.stopRecording(id, req.user.id);
+  });
+
+  // Agents (phase 5): anyone in the room who is a member sends their own agent or a shared one, or sends one away.
+  app.get('/v1/meetings/:id/agents', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return { agents: await ma.listAgents(id, req.user.id) };
+  });
+  app.post('/v1/meetings/:id/agents', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const agentId = (req.body as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof agentId !== 'string' || !agentId) throw badRequest('validation', 'agentId: expected an agent id');
+    return ma.sendAgent(id, req.user.id, agentId);
+  });
+  app.delete('/v1/meetings/:id/agents/:agentId', { preHandler: requireAuth }, async (req) => {
+    const { id, agentId } = req.params as { id: string; agentId: string };
+    return ma.recallAgent(id, req.user.id, agentId);
   });
 
   app.post('/v1/meetings/:id/leave', { preHandler: requireAuth }, async (req) => {
