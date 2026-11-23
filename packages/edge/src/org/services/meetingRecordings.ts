@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { ApiError } from '../lib/errors.js';
 import { meetingRow, requireRoomAccess, rtk, type MeetingRow } from './meetings.js';
 import { postHuddleSystemMessage } from './messages.js';
+import { writeAgentNotes } from './meetingAgents.js';
 
 /** What Meet needs of the organization's Docs object (edge/src/docs/object.ts `saveMeetingFiles`). */
 export interface MeetingDocs {
@@ -23,6 +24,9 @@ export interface MeetingDocs {
 }
 
 let docsOf: ((organizationId: string) => MeetingDocs) | null = null;
+
+/** The Docs objects, when the Org object has handed them over (agents' Notes are saved through it too: meetingAgents.ts). */
+export const meetingDocs = () => docsOf;
 
 /** The Org object hands over its Docs binding at start (object.ts); tests hand over a fake. */
 export function setMeetingDocs(fn: ((organizationId: string) => MeetingDocs) | null): void {
@@ -232,7 +236,7 @@ async function chatOf(m: MeetingRow): Promise<{ id: string; workspaceId: string 
 const absolute = (url: string) => new URL(url, config.webUrlBase).toString();
 
 /** A `file_shared` line (Chat draws its address as the file's chip): "<sentence>\n<address>". Best-effort. */
-async function postFileLine(m: MeetingRow, authorId: string, sentence: string, url: string): Promise<void> {
+export async function postFileLine(m: MeetingRow, authorId: string, sentence: string, url: string): Promise<void> {
   const chat = await chatOf(m);
   if (chat) await postHuddleSystemMessage(chat, authorId, 'file_shared', `${sentence}\n${absolute(url)}`);
 }
@@ -352,13 +356,16 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
     if (!res.ok) throw new Error(`transcript download failed: ${res.status}`);
     const lines = parseTranscript(await res.text());
     const date = folderDate(row.startedAt, owner.timezone);
+    const transcriptText = transcriptMarkdown(m.title, date, lines);
     const saved = await docsOf(m.workspaceId).saveMeetingFiles(m.workspaceId, { userId: row.startedBy, email: owner.email }, {
       folder: row.folder,
-      markdown: { title: 'Transcript', text: transcriptMarkdown(m.title, date, lines) },
+      markdown: { title: 'Transcript', text: transcriptText },
     });
     if (!saved.markdown) throw new Error('Docs saved no transcript');
     await db.update(schema.meetingRecordings).set({ transcriptUrl: saved.markdown.url, transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
     await postFileLine(m, row.startedBy, `The transcript of this meeting is in Docs › ${row.folder}`, saved.markdown.url);
+    // Phase 5: each agent sent to this session writes its Notes from it.
+    await writeAgentNotes(m, row, transcriptText, lines.some((l) => !!l.sentence?.trim()));
   } catch (err) {
     console.error('meeting transcript: could not save to Docs', { recordingId: row.id, err: (err as Error).message });
     await db.update(schema.meetingRecordings).set({ transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));

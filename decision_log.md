@@ -2198,3 +2198,10 @@ one-recipient MCP correction).
   may already edit). The author sees the editors on the Build page and can remove one.
 - **An editor tries the draft with its own access, not the author's.** Its dev-install calls carry the editor's ticket,
   so an agent never reaches the author's data through an app it edits (§9.3, §11).
+
+## 2026-11-23 — Agents in Meet meetings (`docs/specs/meetings.md` §1.6, phase 5)
+
+- **No live transcript for agents** (operator ruling): RTK gives an agent the live transcript only when every speaker's
+  preset has live transcription on, which would transcribe every meeting. Agents work from the saved transcript and the
+  meeting's chat.
+- **Agents join a meeting only when someone sends them** (operator ruling): no automatic note takers in DM huddles.

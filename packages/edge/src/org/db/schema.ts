@@ -788,6 +788,29 @@ export const meetingRecordings = sqliteTable(
   (t) => [index('meeting_recordings_meeting_idx').on(t.meetingId, t.startedAt), index('meeting_recordings_session_idx').on(t.sessionId)],
 );
 
+/**
+ * Agents sent to a meeting (Meet phase 5, docs/specs/meetings.md §1.6, §5.4): one row per sending. The agent is in the
+ * room while `left_at` is null (its MeetingAgent object holds RTK's agent WebSocket); after the session's transcript is
+ * saved it writes Notes into the meeting's folder (`notes_url`).
+ */
+export const meetingAgents = sqliteTable(
+  'meeting_agents',
+  {
+    id: text('id').primaryKey(),
+    meetingId: text('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    /** Who sent it: owner of its Notes in Docs, as the recorder owns the recording. */
+    sentBy: text('sent_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    /** RTK's session it joined: its Notes come from that session's transcript. */
+    sessionId: text('session_id'),
+    joinedAt: integer('joined_at', { mode: 'timestamp_ms' }).notNull(),
+    leftAt: integer('left_at', { mode: 'timestamp_ms' }),
+    /** Its Notes' address in Docs, once written; '' while it writes them. */
+    notesUrl: text('notes_url'),
+  },
+  (t) => [index('meeting_agents_meeting_idx').on(t.meetingId, t.joinedAt), index('meeting_agents_session_idx').on(t.sessionId)],
+);
+
 export const huddleInviteTargets = sqliteTable(
   'huddle_invite_targets',
   {

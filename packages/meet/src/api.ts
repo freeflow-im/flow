@@ -38,6 +38,12 @@ export const api = {
   /** Start or stop recording (anyone in the room who is a member, ruling R8). The room hears the change from RealtimeKit. */
   startRecording: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/recording`, {}),
   stopRecording: (ref: string) => call<{ ok: true }>('DELETE', `/v1/meetings/${ref}/recording`),
+  /** The agents this person may send (theirs and the organization's shared hosted ones), from the assistant's list. */
+  sendableAgents: async (workspaceId: string) =>
+    (await call<{ agents: SendableAgent[] }>('GET', `/api/agent/agents?workspace=${encodeURIComponent(workspaceId)}`)).agents.filter((a) => a.role !== 'admin'),
+  /** Send an agent to the room (phase 5): it joins, turns recording on, and writes Notes after the meeting. */
+  sendAgent: (ref: string, agentId: string) => call<{ id: string; agentId: string; name: string }>('POST', `/v1/meetings/${ref}/agents`, { agentId }),
+  recallAgent: (ref: string, agentId: string) => call<{ ok: true }>('DELETE', `/v1/meetings/${ref}/agents/${encodeURIComponent(agentId)}`),
   /** The tab is closing: a request that outlives the page (no answer is read). */
   leaveOnClose: (ref: string) => navigator.sendBeacon(`/v1/meetings/${ref}/leave`),
   /** The person's events between two times, from Calendar's API, in this organization (Meet home's Today list). */
@@ -49,6 +55,17 @@ export const api = {
       )
     ).events,
 };
+
+/** An agent from GET /api/agent/agents (UsableAgentDTO's fields Meet reads). */
+export interface SendableAgent {
+  id: string;
+  displayName: string;
+  self: boolean;
+  role?: string;
+}
+
+/** An agent's RealtimeKit participant id starts with this (the server's AGENT_ID_PREFIX): `agent:<user id>`. */
+export const agentIdOf = (id: string | undefined): string | null => (id?.startsWith('agent:') ? id.slice('agent:'.length) : null);
 
 /** The fields of a Calendar event Meet's Today list reads (packages/calendar has the rest). */
 export interface CalendarEvent {

@@ -757,6 +757,28 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /**
+   * An agent's meeting Notes (Meet phase 5, org/services/meetingAgents.ts): one headless turn on the prompt (which quotes
+   * the meeting's transcript), in a conversation of its own per meeting session, and what it wrote is given back for the
+   * organization's object to save in Docs. A personal agent runs with its sponsor's access; a shared agent as itself,
+   * asked by whoever sent it.
+   */
+  async meetingNotes(p: { organizationId: string; runtime: HostedRuntimeDTO; key: string; prompt: string; askerUserId: string; askerAccountId: string | null }): Promise<string> {
+    const { runtime, organizationId } = p;
+    this.learnName(runtime.agentName);
+    await this.learnAgentAccount(runtime.agentAccountId, runtime.mode);
+    await this.useOrgModel(organizationId);
+    this.requireModel();
+    const conversation = `meeting:${p.key}`;
+    const shared = runtime.mode === 'shared' && p.askerAccountId ? { invokedBy: p.askerAccountId, asker: p.askerUserId } : {};
+    const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the agent in a meeting', shared);
+    const { text } = await this.runHeadless({
+      organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
+      first: { message: p.prompt }, ...(shared.invokedBy ? { stamp: { invokedBy: shared.invokedBy } } : {}),
+    });
+    return text;
+  }
+
+  /**
    * One run of a Chat conversation's turn (runHeadless, with the sponsor's access): the text the turn wrote is posted as
    * the assistant where it was asked. Its send_message posts go out at once (operator ruling 2026-11-17, R-C).
    */

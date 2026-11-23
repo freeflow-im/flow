@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
 import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
-import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
+import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
+import { SendAgent } from './SendAgent';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
 import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
 import { ChatFrame } from './ChatFrame';
@@ -384,10 +385,28 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
                     {p === self ? `${p.name} (you)` : p.name}
                     {isGuestId(p.customParticipantId) && <span className="ml-1.5 text-xs text-muted">Guest</span>}
                   </span>
-                  {!p.audioEnabled && <MicOff size={15} className="text-muted" aria-label="Muted" />}
+                  {agentIdOf(p.customParticipantId) && <span className="flex-none text-xs text-muted">Agent</span>}
+                  {agentIdOf(p.customParticipantId) && !info.guest ? (
+                    <button
+                      type="button"
+                      onClick={() => void api.recallAgent(info.ref, agentIdOf(p.customParticipantId)!).catch((e: unknown) => setMediaError(`Could not send ${p.name} away: ${e instanceof Error ? e.message : String(e)}`))}
+                      className="cursor-pointer rounded-full border border-hairline bg-transparent px-2.5 py-0.5 text-xs text-muted hover:bg-black/5"
+                    >
+                      Send away
+                    </button>
+                  ) : (
+                    !p.audioEnabled && <MicOff size={15} className="text-muted" aria-label="Muted" />
+                  )}
                 </li>
               ))}
             </ul>
+            )}
+            {panel === 'people' && !info.guest && info.meeting && (
+              <SendAgent
+                meeting={info.meeting}
+                present={new Set(everyone.map((p) => agentIdOf(p.customParticipantId)).filter((id): id is string => !!id))}
+                onError={setMediaError}
+              />
             )}
           </aside>
         )}
