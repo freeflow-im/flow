@@ -25,7 +25,7 @@ beforeEach(() => {
     if (bare.endsWith('/members')) return json({ members: [{ userId: 'u-ada', displayName: 'Ada', kind: 'personal_agent', agentRuntime: 'hosted', sponsorId: 'u-ann', address: 'ada@acme.test', isAgent: true }] });
     if (bare === '/v1/workspaces/o1/assistant/models') return json(MODELS);
     if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name ?? 'Ann’s assistant', instructions: body.instructions ?? '', ...(body.modelId ? { modelId: body.modelId } : {}), updatedAt: null } : { name: 'Ann’s assistant', instructions: '', modelId: 'e-gone', updatedAt: null } });
-    if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [] });
+    if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [], own: ['ann@acme.test', 'ann@gmail.example'] });
     if (bare === '/v1/workspaces/o1/assistant/model') return json({ settings: { provider: 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: null, openaiKey: null, openrouterKey: null, braveKey: null } });
     if (bare === '/v1/workspaces/o1/assistant/avatar' && method === 'PUT') return json({ avatarUrl: body.preset ? `/agent-avatars/${body.preset}.svg` : null });
     return json({ ok: true });
@@ -56,10 +56,11 @@ describe('Your assistant', () => {
     expect(within(screen.getByTestId('card-assistant-picture')).getAllByRole('radio')).toHaveLength(8);
   });
 
-  it('starts with nobody allowed to mail it, and saves the senders', async () => {
+  it('allows the person’s own addresses, starts with nobody else, and saves the senders', async () => {
     mount();
     const box = (await screen.findByTestId('assistant-allowlist')) as HTMLTextAreaElement;
     expect(box.value).toBe('');
+    expect((await screen.findByTestId('assistant-own-addresses')).textContent).toContain('ann@acme.test, ann@gmail.example');
     fireEvent.change(box, { target: { value: 'ann@acme.test\npat@partner.example' } });
     fireEvent.click(screen.getByTestId('assistant-allowlist-save'));
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/senders' && JSON.stringify((c.body as { senders: string[] }).senders) === '["ann@acme.test","pat@partner.example"]')).toBe(true));

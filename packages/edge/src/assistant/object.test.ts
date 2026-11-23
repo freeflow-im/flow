@@ -416,12 +416,28 @@ describe('incoming email wakes the assistant through its subscription (decision_
               return Response.json({ error: 'not found' }, { status: 404 });
             },
             sendAsAssistant: async (p: Record<string, unknown>) => { mailed.push(p); return { ok: true }; },
+            // Ann's own mail accounts: her FreeFlow address, and the Gmail she connected.
+            calendarIdentities: async () => (owner === 'acct-1' ? [{ id: 'm1', email: 'ann@acme.test', displayName: 'Ann', status: 'ok' }, { id: 'm2', email: 'Ann@Gmail.example', displayName: 'Ann', status: 'ok' }] : []),
           }),
         },
+        // Ann's calendar accounts: her FreeFlow calendar, and a Google calendar on her work address.
+        CALENDAR: { idFromName: (x: string) => x, get: (owner: string) => ({ accountEmails: async () => (owner === 'acct-1' ? ['ann@acme.test', 'ann.lee@work.example'] : []) }) },
       } as unknown as AssistantEnv,
     };
   }
   const put = (a: TestAssistant, body: unknown) => a.handle(req('PUT', '/api/agent/mail-allowlist', body), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' });
+
+  it('always allows the sponsor\'s own addresses (decision_log 2026-11-23), beside the allowlist', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const r = await (await put(a, { senders: ['pat@partner.example'] })).json() as { senders: string[]; own: string[] };
+    expect(r.senders).toEqual(['pat@partner.example']);
+    expect(r.own).toEqual(['ann.lee@work.example', 'ann@acme.test', 'ann@gmail.example']);
+    expect((await a.mailSenders()).sort()).toEqual(['ann.lee@work.example', 'ann@acme.test', 'ann@gmail.example', 'pat@partner.example']);
+    // With nobody on the list, answering still has senders: Ann's own.
+    await put(a, { senders: [], autoReply: true });
+    expect(e.subs.size).toBe(1);
+  });
 
   it('keeps one answering subscription while answering is on and a sender is allowed, and none otherwise', async () => {
     const e = env();

@@ -89,15 +89,17 @@ agent of §6, and it works the way a human assistant does:
   others cannot open) where others can read them unless he asked for exactly that.
 - **Her own mailbox and calendar.** Her address is made as a person's is, from her name on the primary domain
   (`ada@locked-in.freeflow.im`, numbered if taken), and mail she sends shows "Ada 🤖 Scott". She accepts mail only from
-  a **sender allowlist** the sponsor writes, which **starts empty**: while it is empty her mailbox is never checked at
-  all; once it names a sender it is checked every ten minutes (operator ruling 2026-11-11, "Assistant mail is opt-in").
+  her sponsor's own addresses (their FreeFlow address and the mail and calendar accounts they connected; operator ruling
+  2026-11-23) and a **sender allowlist** the sponsor writes, which **starts empty**. Her mailbox is checked every ten
+  minutes once one of those names a sender (operator ruling 2026-11-11, "Assistant mail is opt-in", amended 2026-11-23).
   Mail from anyone else is moved to her Refused folder unread, and a sender is matched only on a message that passes
   SPF, DKIM or DMARC for its From domain. Mail she takes waits in her inbox and is published as `mail.received` on her
   account (refused mail never is): incoming email is an event-based trigger like any other (operator ruling 2026-11-17,
   R-B). She answers it by email on her own only when the sponsor turns on "Agent always responds to incoming email" (off
   by default; operator ruling 2026-11-17), which is a `wake` subscription on her `mail.received` (`assistant/mailWake.ts`,
   kept by `Assistant.syncMailWake`), owned by the sponsor and listed in their Automations (R-D: automations are a person's, never an agent's; deleting it there turns answering off), whose output step mails her answer back to the sender (`reply: 'mail'`); otherwise she
-  reads it when the sponsor asks, or when an automation they made wakes her. Invitations to her calendar follow the same list. She works in the
+  reads it when the sponsor asks, or when an automation they made wakes her. Invitations to her calendar follow the same list: one she keeps by email goes on her own calendar, needing an answer
+  (2026-11-23). She works in the
   sponsor's mailbox and calendars too, through the sponsor's access. She knows her own mailbox: her prompt gives her address and who may mail her, and in the
   panel and in Chat her mailbox is one of the mail accounts her mail tools list (marked `yours`), read as her own account,
   beside the sponsor's (2026-11-16).

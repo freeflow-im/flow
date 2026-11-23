@@ -131,6 +131,7 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
     onSuccess: async () => qc.invalidateQueries({ queryKey: ['assistant', org.id, 'allowlist'] }),
   });
   const saved = (list.data ?? []).join('\n');
+  const own = useQuery({ queryKey: ['assistant', org.id, 'ownAddresses'], queryFn: () => assistantApi.ownAddresses(org.id) });
   const auto = useQuery({ queryKey: ['assistant', org.id, 'autoReply'], queryFn: () => assistantApi.autoReply(org.id) });
   const setAuto = useMutation({
     mutationFn: (on: boolean) => assistantApi.saveAutoReply(org.id, on),
@@ -139,12 +140,17 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
   return (
     <Card
       title="Who may mail it"
-      intro="Empty, your assistant reads no mail at all. Add the addresses it may take mail from, one per line (yours too, if you want to mail it); it then checks every ten minutes, and mail from anyone else goes to its Refused folder, unread. Mail it takes waits in its inbox until you ask about it, unless it always responds."
+      intro="Your assistant takes mail from your own addresses, and from the ones you add here, one per line. It checks every ten minutes; mail from anyone else goes to its Refused folder, unread. Mail it takes waits in its inbox until you ask about it, unless it always responds. Invitations it takes go on its calendar."
       testid="card-assistant-allowlist"
     >
       {list.isError && <ErrorLine error={errorText(list.error)} />}
       {list.data && (
         <div className="flex flex-col gap-3">
+          {!!own.data?.length && (
+            <p className="text-sm text-muted" data-testid="assistant-own-addresses">
+              Always allowed, as yours: {own.data.join(', ')}
+            </p>
+          )}
           <textarea className={`${input} h-24 w-full`} value={text} placeholder="name@example.com" onChange={(e) => setText(e.target.value)} disabled={save.isPending} data-testid="assistant-allowlist" />
           <div>
             <Button disabled={save.isPending || text === saved} onClick={() => save.mutate()} testid="assistant-allowlist-save">
