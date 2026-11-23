@@ -148,6 +148,27 @@ describe('signing in', () => {
     expect(await org.finishAppOAuth({ state, code: 'again', error: null })).toMatchObject({ ok: false });
   });
 
+  it('sends the client in a Basic header and adds the manifest\'s sign-in settings, when it says so', async () => {
+    const m = manifest();
+    m.oauth = [{ ...GITHUB, tokenAuth: 'basic', authorizeParams: { access_type: 'offline', prompt: 'consent' } }];
+    await org.recordUserAppUpload({ manifest: m, files: { 'server.js': 10 }, prefix: 'p2/', by: ACCT.ann });
+    expect(await org.updateUserApp({ name: 'taskboard', source: { name: 'taskboard', version: 2 }, by: ACCT.ann, grants: { members: true, accounts: [] } })).toMatchObject({ ok: true });
+    let auth: string | null = null;
+    let form: URLSearchParams | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      auth = new Headers((init as RequestInit).headers).get('authorization');
+      form = new URLSearchParams(String((init as RequestInit).body));
+      return Response.json({ access_token: 'tok' });
+    });
+    const { url, done } = await signIn();
+    expect(url.searchParams.get('access_type')).toBe('offline');
+    expect(url.searchParams.get('prompt')).toBe('consent');
+    expect(done).toMatchObject({ ok: true });
+    expect(auth).toBe(`Basic ${Buffer.from('Iv1.abc:shh-secret').toString('base64')}`);
+    expect(form!.get('client_secret')).toBeNull();
+    expect(form!.get('code')).toBe('the-code');
+  });
+
   it('reads a form-encoded answer (GitHub without Accept)', async () => {
     provider(() => ({ body: 'access_token=gho_form&scope=repo&token_type=bearer' }));
     expect((await signIn()).done).toMatchObject({ ok: true });

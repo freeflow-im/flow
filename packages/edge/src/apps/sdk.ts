@@ -189,5 +189,8 @@ export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hoste
               "authorizeUrl": "https://github.com/login/oauth/authorize",
               "tokenUrl": "https://github.com/login/oauth/access_token",
               "scopes": ["read:user", "repo"] }]                 the scopes asked for; put the service's API host (api.github.com) in "egress"
+                                        optional per provider: "tokenAuth": "basic" for a service that takes the client only in an HTTP Basic
+                                        header (Notion, Reddit; default "body"); "authorizeParams": more sign-in settings, such as Google's
+                                        { "access_type": "offline", "prompt": "consent" } (needed for a refresh token)
 }
 Files: server.js (one ES module, with the SDK), migrations/0001_name.sql (applied once each in order; add a new file for a change, never edit an applied one), ui/index.html and other ui/ files.`;

@@ -112,6 +112,8 @@ export async function beginOAuth(p: {
     returnOrigin: p.returnOrigin, expiresAt: Date.now() + OAUTH_STATE_MS,
   });
   const url = new URL(provider.authorizeUrl);
+  // The manifest's own settings first; the ones the suite sets (checked at publish) always win.
+  for (const [k, v] of Object.entries(provider.authorizeParams ?? {})) url.searchParams.set(k, v);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', client.clientId);
   url.searchParams.set('redirect_uri', p.redirectUri);
@@ -138,14 +140,26 @@ export async function takeOAuthState(state: string): Promise<typeof userAppOAuth
 
 interface TokenSet { accessToken: string; tokenType: string; refreshToken: string | null; scope: string | null; expiresAt: number | null }
 
-/** Asks the provider's token endpoint; its answer is JSON, or form-encoded (GitHub's default). */
-async function tokenRequest(tokenUrl: string, form: Record<string, string>, fetcher: typeof fetch): Promise<TokenSet> {
+/**
+ * Asks the provider's token endpoint, with the client in the form body or, for `tokenAuth: "basic"`, in an HTTP Basic
+ * header (RFC 6749 §2.3.1: each part form-encoded first). The answer is JSON, or form-encoded (GitHub's default).
+ */
+async function tokenRequest(p: AppOAuthProvider, client: { clientId: string; clientSecret: string }, form: Record<string, string>, fetcher: typeof fetch): Promise<TokenSet> {
+  const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', 'user-agent': 'FreeFlow-Apps/1' };
+  const body = new URLSearchParams(form);
+  if (p.tokenAuth === 'basic') {
+    const part = (t: string) => encodeURIComponent(t).replace(/%20/g, '+');
+    headers.authorization = `Basic ${btoa(`${part(client.clientId)}:${part(client.clientSecret)}`)}`;
+  } else {
+    body.set('client_id', client.clientId);
+    body.set('client_secret', client.clientSecret);
+  }
   let res: Response;
   try {
-    res = await fetcher(tokenUrl, {
+    res = await fetcher(p.tokenUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', 'user-agent': 'FreeFlow-Apps/1' },
-      body: new URLSearchParams(form).toString(),
+      headers,
+      body: body.toString(),
       signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     });
   } catch (err) {
@@ -182,9 +196,8 @@ export async function finishOAuth(p: {
   const at = { name: p.state.name, dev: p.state.dev };
   const provider = providerOf(p.manifest, p.state.provider);
   const client = await clientFor(at, provider, p.installed);
-  const t = await tokenRequest(provider.tokenUrl, {
-    grant_type: 'authorization_code', code: p.code, redirect_uri: p.redirectUri,
-    client_id: client.clientId, client_secret: client.clientSecret, code_verifier: p.state.verifier,
+  const t = await tokenRequest(provider, client, {
+    grant_type: 'authorization_code', code: p.code, redirect_uri: p.redirectUri, code_verifier: p.state.verifier,
   }, p.fetcher ?? fetch);
   await keepToken(at, provider.id, p.state.accountId, t);
   return { provider };
@@ -220,7 +233,7 @@ export async function oauthToken(at: AppInstall, manifest: UserAppManifest, inst
   if (kept.refreshToken) {
     try {
       const client = await clientFor(at, p, installed);
-      const t = await tokenRequest(p.tokenUrl, { grant_type: 'refresh_token', refresh_token: kept.refreshToken, client_id: client.clientId, client_secret: client.clientSecret }, fetcher);
+      const t = await tokenRequest(p, client, { grant_type: 'refresh_token', refresh_token: kept.refreshToken }, fetcher);
       const next = { ...t, refreshToken: t.refreshToken ?? kept.refreshToken, scope: t.scope ?? row.scope };
       await keepToken(at, p.id, accountId, next);
       return { accessToken: next.accessToken, tokenType: next.tokenType, scope: next.scope, expiresAt: next.expiresAt };

@@ -63,6 +63,9 @@ describe('checkUserAppManifest', () => {
     expect(problems({ ...hostedApp, oauth: [gh, gh] })).toContain('oauth: "github" is declared twice');
     expect(problems({ ...hostedApp, oauth: [{ ...gh, id: 'Git Hub' }] })[0]).toMatch(/^oauth: "Git Hub" must be/);
     expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenUrl: 'http://github.com/token' }] })).toContain('oauth.github.tokenUrl: must be https');
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenAuth: 'basic' as const, authorizeParams: { access_type: 'offline', prompt: 'consent' } }] })).toEqual([]);
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, authorizeParams: { redirect_uri: 'https://evil.example.com' } }] })).toContain('oauth.github.authorizeParams: "redirect_uri" is set by FreeFlow');
+    expect(problems({ ...hostedApp, oauth: [{ ...gh, tokenAuth: 'header' as never }] })[0]).toMatch(/^oauth\.0\.tokenAuth/);
   });
 
   it('needs https unless told otherwise', () => {

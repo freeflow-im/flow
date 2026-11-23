@@ -334,7 +334,12 @@ host refuses without the session cookie that only exists inside the suite's fram
 - **The manifest declares the service**: `"oauth": [{ "id": "github", "label": "GitHub", "authorizeUrl": "…",
   "tokenUrl": "…", "scopes": ["repo"] }]`, at most five, https only, hosted apps only. The install card says that people
   may sign in to it. The service's API host goes in `egress` as usual; the token address does not need to, since the
-  suite calls it, not the app.
+  suite calls it, not the app. Two optional settings per provider cover services that differ from the usual pattern:
+  `"tokenAuth": "basic"` sends the client id and secret in an HTTP Basic header instead of the form body (Notion,
+  Reddit), and `"authorizeParams"` adds settings to the sign-in address, such as Google's `access_type: offline` and
+  `prompt: consent`, without which Google gives no refresh token. They may not name the settings the suite sets itself
+  (`client_id`, `redirect_uri`, `state`, `scope`, PKCE). Not covered yet: services with an address per customer
+  (Shopify, Zendesk, Salesforce's `instance_url`), OAuth 1.0, and plain API keys.
 - **The client secret is typed by a person and kept by the suite.** An owner or admin enters the client id and secret
   in Admin › Apps; a draft's author may enter their own on the Build page (Sign-in) for the preview. Each is stored
   encrypted (`user_app_oauth_clients`), never shown again, never in the app's files, and an agent cannot set one. A

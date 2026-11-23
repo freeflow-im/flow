@@ -84,7 +84,17 @@ export interface AppOAuthProvider {
   tokenUrl: string;
   /** The scopes asked for, joined with spaces in the request. */
   scopes?: string[];
+  /**
+   * How the suite sends the client id and secret to `tokenUrl`: in the form body (`body`, the default, which most services
+   * take) or in an HTTP Basic header (`basic`: Notion, Reddit and others that take only that).
+   */
+  tokenAuth?: 'body' | 'basic';
+  /** More settings for the sign-in address, such as Google's `{ "access_type": "offline", "prompt": "consent" }`. */
+  authorizeParams?: Record<string, string>;
 }
+
+/** The sign-in address's settings the suite sets itself: `authorizeParams` may not name them. */
+export const APP_OAUTH_RESERVED_PARAMS = ['response_type', 'client_id', 'redirect_uri', 'state', 'scope', 'code_challenge', 'code_challenge_method'] as const;
 
 /** The most providers one app may declare. */
 export const APP_OAUTH_MAX = 5;
@@ -146,7 +156,16 @@ const Manifest = z
     uses: z.array(z.enum(APP_USES)).max(APP_USES.length).optional(),
     egress: z.array(z.string().max(253)).max(20).optional(),
     oauth: z
-      .array(z.object({ id: z.string(), label: z.string().min(1).max(40), authorizeUrl: url, tokenUrl: url, scopes: z.array(z.string().min(1).max(200)).max(30).optional() }).strict())
+      .array(
+        z
+          .object({
+            id: z.string(), label: z.string().min(1).max(40), authorizeUrl: url, tokenUrl: url,
+            scopes: z.array(z.string().min(1).max(200)).max(30).optional(),
+            tokenAuth: z.enum(['body', 'basic']).optional(),
+            authorizeParams: z.record(z.string(), z.string().max(200)).optional(),
+          })
+          .strict(),
+      )
       .max(APP_OAUTH_MAX)
       .optional(),
   })
@@ -183,6 +202,12 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
     if (!APP_OAUTH_ID.test(o.id)) problems.push(`oauth: "${o.id}" must be 2-20 lowercase letters, digits and dashes, starting with a letter`);
     if (providerIds.has(o.id)) problems.push(`oauth: "${o.id}" is declared twice`);
     providerIds.add(o.id);
+    const params = Object.keys(o.authorizeParams ?? {});
+    if (params.length > 10) problems.push(`oauth.${o.id}.authorizeParams: at most 10`);
+    for (const k of params) {
+      if (!/^[A-Za-z][A-Za-z0-9_.-]{0,39}$/.test(k)) problems.push(`oauth.${o.id}.authorizeParams: "${k}" must be 1-40 letters, digits, _ . or -`);
+      else if ((APP_OAUTH_RESERVED_PARAMS as readonly string[]).includes(k)) problems.push(`oauth.${o.id}.authorizeParams: "${k}" is set by FreeFlow`);
+    }
     for (const [field, value] of [['authorizeUrl', o.authorizeUrl], ['tokenUrl', o.tokenUrl]] as const) {
       if (!value.startsWith('https://') && !(opts.allowHttp && value.startsWith('http://'))) problems.push(`oauth.${o.id}.${field}: must be https`);
     }
