@@ -324,6 +324,46 @@ app fetching a URL.
   `ctx.suite` (the API as the caller or as the app), `ctx.publish(type, data, ref, { about })` (§5.1),
   `ctx.resolve(kind, handler)` for reference chips.
 
+### 6.5 Signing in to other services (OAuth)
+
+*Added 2026-11-22 (task 30).* A hosted app often acts on a person's account somewhere else: the Taskboard reads their
+GitHub issues. That needs an OAuth sign-in, which an app cannot do safely by itself: the client secret would sit in the
+app's files, where every editor and agent of the draft reads it, and the callback is a top-level page, which the app's
+host refuses without the session cookie that only exists inside the suite's frame. So **the suite runs the sign-in**.
+
+- **The manifest declares the service**: `"oauth": [{ "id": "github", "label": "GitHub", "authorizeUrl": "…",
+  "tokenUrl": "…", "scopes": ["repo"] }]`, at most five, https only, hosted apps only. The install card says that people
+  may sign in to it. The service's API host goes in `egress` as usual; the token address does not need to, since the
+  suite calls it, not the app.
+- **The client secret is typed by a person and kept by the suite.** An owner or admin enters the client id and secret
+  in Admin › Apps; a draft's author may enter their own on the Build page (Sign-in) for the preview. Each is stored
+  encrypted (`user_app_oauth_clients`), never shown again, never in the app's files, and an agent cannot set one. A
+  draft without its own client uses the install's, but only when its provider has the same id **and the same two
+  addresses**: a draft that changes `tokenUrl` would otherwise send the organization's secret to its own server.
+- **One callback for every app**: `<suite>/v1/apps/oauth/callback`, shown on both forms, to register with the service.
+  The state carries the organization's id, so the Worker knows which Org object finishes the sign-in. It is one use,
+  ten minutes, stored hashed with the PKCE verifier (S256), who started it and the app's origin (`user_app_oauth_states`).
+- **Tokens are per person, per install**: `user_app_oauth_tokens`, encrypted, keyed by app, dev install, provider and
+  account. A dev install's are apart from the install's. A token that ran out is refreshed when the service gave a
+  refresh token; when that fails it is dropped, and the app asks the person to sign in again. Removing the app or
+  deleting the draft deletes its clients, states and tokens. A removed member's tokens are never handed out, since every
+  call needs a ticket for a current member.
+- **The app's side** goes through the caller's ticket (§6.3), so an app only ever gets its caller's own token. The
+  screen uses host paths on its own origin: `GET /__freeflow/oauth/<id>` (status), `POST /__freeflow/oauth/<id>/start`
+  (`{ url }`, opened with `window.open`), `DELETE /__freeflow/oauth/<id>` (disconnect). The sign-in window ends on a
+  suite page that posts `{ type: 'freeflow:oauth', provider, ok }` to its opener at the app's origin and closes; the
+  screen treats that only as a hint and checks the status again (it also polls, in case the service's page cut the
+  opener). The server uses `ctx.oauth.fetch(id, url, init)` (the caller's token as a bearer; AppError 401 when they have
+  not connected), `ctx.oauth.token(id)`, `ctx.oauth.status(id)` and `ctx.oauth.disconnect(id)`. An agent calling a tool
+  is its own caller: it uses its own connection, or gets "not signed in".
+- The app frames, the installed tab and the Build preview, allow `allow-popups-to-escape-sandbox`, so the sign-in
+  window is an ordinary page: some services refuse to sign in inside a sandboxed window.
+
+With this, a dev install's `egress` changed too (§9.3): a draft reaches the hosts its manifest declares **that an admin
+already approved for the installed version of the same app**, and nothing else. Before, a draft reached no host at all,
+so the author of an app that calls GitHub could not try a change to it. A host the installed version does not have
+still waits for an admin.
+
 ## 7. Where the server runs
 
 ### 7.1 Two hosting modes
@@ -440,8 +480,9 @@ Nobody reviewed a dev install, so it has less power than an approved one:
   ∩ the caller's access. When a sponsor opens the dev tab of an app their agent wrote, the app can read nothing the
   agent could not already read. Without this rule an agent with narrow grants could write an app that acts with its
   sponsor's whole access.
-- **Its `egress` is empty.** The manifest may declare hosts, and the review card will show them, but the outbound
-  Worker allows none until an admin approves the install. `get_app_logs` shows each blocked call.
+- **Its `egress` is only what was approved.** The manifest may declare hosts, and the review card will show them, but
+  the outbound Worker allows only those an admin already approved for the installed version of the app (2026-11-22,
+  §6.5); a new host waits for an admin to approve a version with it. `get_app_logs` shows each blocked call.
 - **Its events stay in the dev install.** They are visible only to the author and the sponsor.
 
 **An install for the organization** creates an install request. The admins get a card in Admin → Agents & apps and

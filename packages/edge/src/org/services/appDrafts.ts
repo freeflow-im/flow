@@ -5,6 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { APP_NAME, checkAppIcon, checkHostedFiles, checkUserAppManifest, HOSTED_APP_LIMITS, RESERVED_APP_NAMES, type UserAppManifest } from '@flow/shared';
 import { db, schema } from '../db/index.js';
+import { config } from '../config.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { ApiError, badRequest, notFound } from '../../errors';
 
@@ -125,7 +126,8 @@ export function draftProblems(files: Record<string, Uint8Array>): string[] {
   } catch (e) {
     return [`${MANIFEST_FILE} is not JSON: ${(e as Error).message}`];
   }
-  const checked = checkUserAppManifest(json);
+  // A local suite (http://) may sign people in to a local test provider over http (§6.5); a deployed one only over https.
+  const checked = checkUserAppManifest(json, { allowHttp: config.webUrlBase.startsWith('http://') });
   if (!checked.ok) return checked.problems;
   const sizes = Object.fromEntries(Object.entries(files).filter(([p]) => p !== MANIFEST_FILE).map(([p, b]) => [p, b.byteLength]));
   return [...checkHostedFiles(checked.manifest, sizes), ...checkAppIcon(checked.manifest, files)];

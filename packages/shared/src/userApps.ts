@@ -65,7 +65,31 @@ export interface UserAppManifest {
   uses?: AppUse[];
   /** The hosts a hosted app's server may reach (§7.2). */
   egress?: string[];
+  /**
+   * Other services a hosted app's users sign in to, by OAuth (§6.5): the suite runs the sign-in, keeps the client secret
+   * and each person's token; the app asks for the caller's token by the provider's id.
+   */
+  oauth?: AppOAuthProvider[];
 }
+
+/** One service a hosted app signs people in to (§6.5). */
+export interface AppOAuthProvider {
+  /** The provider's id in the app: `ctx.oauth.token('github')`. */
+  id: string;
+  /** Its name for people: "GitHub". */
+  label: string;
+  /** Where the person is sent to sign in and agree: `https://github.com/login/oauth/authorize`. */
+  authorizeUrl: string;
+  /** Where the suite exchanges the code for a token: `https://github.com/login/oauth/access_token`. */
+  tokenUrl: string;
+  /** The scopes asked for, joined with spaces in the request. */
+  scopes?: string[];
+}
+
+/** The most providers one app may declare. */
+export const APP_OAUTH_MAX = 5;
+/** A provider's id: 2-20 lowercase letters, digits and dashes, starting with a letter. */
+export const APP_OAUTH_ID = /^[a-z][a-z0-9-]{1,19}$/;
 
 /** What a hosted app may ask to use of the suite (§6.3): each is an AppSuite method the platform checks. */
 export const APP_USES = ['docs:read', 'chat:write', 'members:read', 'files:read'] as const;
@@ -121,6 +145,10 @@ const Manifest = z
     // Hosted apps only (§7.1): an external app that declares them is told why below.
     uses: z.array(z.enum(APP_USES)).max(APP_USES.length).optional(),
     egress: z.array(z.string().max(253)).max(20).optional(),
+    oauth: z
+      .array(z.object({ id: z.string(), label: z.string().min(1).max(40), authorizeUrl: url, tokenUrl: url, scopes: z.array(z.string().min(1).max(200)).max(30).optional() }).strict())
+      .max(APP_OAUTH_MAX)
+      .optional(),
   })
   .strict();
 
@@ -148,6 +176,16 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
       if (!hosted) problems.push('icon: only a hosted app\'s icon can be an image in ui/; an external app uses an emoji');
     } else if (m.icon.includes('/') || /\.(png|svg|jpe?g|gif|webp|ico)$/i.test(m.icon)) problems.push(`icon: "${m.icon}" must be an emoji, or a PNG or SVG in ui/ ("ui/icon.png")`);
     else if (m.icon.length > ICON_TEXT_MAX) problems.push(`icon: an emoji icon is at most ${ICON_TEXT_MAX} characters; for an image, name a PNG or SVG in ui/ ("ui/icon.png")`);
+  }
+  if (!hosted && m.oauth !== undefined) problems.push('oauth: only a hosted app can have the suite sign people in to other services (user-apps.md §6.5)');
+  const providerIds = new Set<string>();
+  for (const o of m.oauth ?? []) {
+    if (!APP_OAUTH_ID.test(o.id)) problems.push(`oauth: "${o.id}" must be 2-20 lowercase letters, digits and dashes, starting with a letter`);
+    if (providerIds.has(o.id)) problems.push(`oauth: "${o.id}" is declared twice`);
+    providerIds.add(o.id);
+    for (const [field, value] of [['authorizeUrl', o.authorizeUrl], ['tokenUrl', o.tokenUrl]] as const) {
+      if (!value.startsWith('https://') && !(opts.allowHttp && value.startsWith('http://'))) problems.push(`oauth.${o.id}.${field}: must be https`);
+    }
   }
   for (const h of m.egress ?? []) if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(h)) problems.push(`egress: "${h}" must be a host name, such as api.example.com`);
 

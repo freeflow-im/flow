@@ -43,6 +43,7 @@ const CTX: [string, string, string?][] = [
   ['ctx.members', 'list() and search(text): the organization’s people and agents as the caller sees them.', 'members:read'],
   ['ctx.chat', 'post(channelId, text) as the caller; file(fileId) reads a Chat file’s facts.', 'chat:write, files:read'],
   ['ctx.docs', 'read(path): a Docs page, as the caller.', 'docs:read'],
+  ['ctx.oauth', 'fetch(id, url), token(id), status(id), disconnect(id): the caller’s own account on another service they signed in to. FreeFlow runs the sign-in and keeps the secret.', 'the manifest’s "oauth"'],
 ];
 
 const Code = ({ children }: { children: ReactNode }) => <code className="rounded bg-panel px-1 py-0.5 font-mono text-[11px] text-ink">{children}</code>;

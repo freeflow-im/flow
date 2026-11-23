@@ -1018,3 +1018,62 @@ export const userAppDraftEditors = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.name, t.author, t.editor] }), index('user_app_draft_editors_editor').on(t.editor)],
 );
+
+/**
+ * A hosted app's OAuth client for one provider it declares (docs/specs/user-apps.md §6.5): set by an owner or admin for
+ * the install (`dev` empty), or by a draft's author for its dev install (`dev` = the author's account). The client secret
+ * is encrypted as the install's own secret is, and never leaves the platform: no app code, agent or page reads it back.
+ */
+export const userAppOAuthClients = sqliteTable(
+  'user_app_oauth_clients',
+  {
+    name: text('name').notNull(),
+    dev: text('dev').notNull().default(''),
+    provider: text('provider').notNull(),
+    clientId: text('client_id').notNull(),
+    secret: bytea('secret').notNull(),
+    secretNonce: bytea('secret_nonce').notNull(),
+    encKeyId: text('enc_key_id').notNull(),
+    encScheme: integer('enc_scheme').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.dev, t.provider] })],
+);
+
+/**
+ * A sign-in under way (§6.5): the state sent to the provider (stored hashed), who started it and the PKCE verifier. Used
+ * once, within ten minutes.
+ */
+export const userAppOAuthStates = sqliteTable('user_app_oauth_states', {
+  stateHash: bytea('state_hash').primaryKey(),
+  name: text('name').notNull(),
+  dev: text('dev').notNull().default(''),
+  provider: text('provider').notNull(),
+  accountId: text('account_id').notNull(),
+  verifier: text('verifier').notNull(),
+  returnOrigin: text('return_origin').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+});
+
+/**
+ * One account's token for one provider of a hosted app (§6.5): the access token and any refresh token, encrypted as one
+ * JSON body. The install's and a dev install's are apart (`dev`). Removing the app, or deleting the draft, deletes them.
+ */
+export const userAppOAuthTokens = sqliteTable(
+  'user_app_oauth_tokens',
+  {
+    name: text('name').notNull(),
+    dev: text('dev').notNull().default(''),
+    provider: text('provider').notNull(),
+    accountId: text('account_id').notNull(),
+    body: bytea('body').notNull(),
+    bodyNonce: bytea('body_nonce').notNull(),
+    encKeyId: text('enc_key_id').notNull(),
+    encScheme: integer('enc_scheme').notNull(),
+    scope: text('scope'),
+    expiresAt: integer('expires_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.dev, t.provider, t.accountId] }), index('user_app_oauth_tokens_account').on(t.accountId)],
+);

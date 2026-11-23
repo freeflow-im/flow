@@ -9,6 +9,7 @@ import { db, schema } from '../db/index.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { ApiError, badRequest, notFound } from '../../errors';
 import { isActiveAccount } from './shares.js';
+import { removeAppOAuth } from './appOAuth.js';
 import { signBody, SIGNATURE_HEADER } from '../lib/appSigning';
 
 const { userApps, userAppVersions, userAppGrants, userAppAgents, userAppRestorePoints, workspaceMembers, users } = schema;
@@ -180,9 +181,13 @@ export async function setAppGrants(name: string, grants: AppGrants): Promise<voi
   await writeGrants(name, manifestOf(row), grants);
 }
 
-/** Removes an app: its grants and its agents' switch go with it; its versions stay as the record of what was approved. */
+/**
+ * Removes an app: its grants, its agents' switch and its OAuth clients and tokens (§6.5) go with it; its versions stay as
+ * the record of what was approved.
+ */
 export async function removeApp(name: string): Promise<void> {
   await requireRow(name);
+  await removeAppOAuth({ name, dev: '' });
   await db.delete(userAppGrants).where(eq(userAppGrants.name, name));
   await db.delete(userAppAgents).where(eq(userAppAgents.name, name));
   await db.delete(userApps).where(eq(userApps.name, name));

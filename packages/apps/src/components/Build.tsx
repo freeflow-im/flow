@@ -11,6 +11,7 @@ import { AppIcon, intent } from '@flow/suite-bar';
 import { appsApi, type AppDraft, type InstalledApp, type ToolAnswer } from '../api';
 import { InstallDialog } from './InstallDialog';
 import { AppsHelpCallout } from './AppsHelp';
+import { DraftOAuth, useDraftOAuth } from './DraftOAuth';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const POLL_MS = 3000;
@@ -141,7 +142,9 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
   const [text, setText] = useState('');
   const [saved, setSaved] = useState('');
   // The app first (its live preview); the code is a click away.
-  const [view, setView] = useState<'code' | 'preview' | 'try'>('preview');
+  const [view, setView] = useState<'code' | 'preview' | 'try' | 'signin'>('preview');
+  const oauth = useDraftOAuth(org, name, d?.updatedAt);
+  const views = (oauth.data?.providers.length ? ['code', 'preview', 'try', 'signin'] : ['code', 'preview', 'try']) as ('code' | 'preview' | 'try' | 'signin')[];
   const assistant = useAssistantWidth();
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeLink, setNoticeLink] = useState<{ label: string; href: string } | null>(null);
@@ -252,8 +255,8 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
         <span className="text-xs text-muted">draft of {d.name}</span>
         <span className={`text-xs ${d.problems.length ? 'text-danger' : 'text-muted'}`} data-testid="problem-count">{d.problems.length ? `${d.problems.length} problem${d.problems.length === 1 ? '' : 's'}` : 'no problems'}</span>
         <div className="ml-auto flex gap-1">
-          {(['code', 'preview', 'try'] as const).map((v) => (
-            <button key={v} type="button" onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm ${view === v ? 'bg-selected-blue font-semibold text-primary' : 'text-ink hover:bg-hover'}`} data-testid={`view-${v}`}>{v === 'code' ? 'Code' : v === 'preview' ? 'Preview' : 'Try'}</button>
+          {views.map((v) => (
+            <button key={v} type="button" onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm ${view === v ? 'bg-selected-blue font-semibold text-primary' : 'text-ink hover:bg-hover'}`} data-testid={`view-${v}`}>{v === 'code' ? 'Code' : v === 'preview' ? 'Preview' : v === 'try' ? 'Try' : 'Sign-in'}</button>
           ))}
           {admin && <button type="button" className="rounded-md border border-border px-3 py-1 text-sm hover:bg-hover" onClick={() => void openInstall()} data-testid="install-latest">Install…</button>}
           <button type="button" className="flex items-center gap-1 rounded-md bg-primary px-3 py-1 text-sm font-semibold text-white disabled:opacity-50" disabled={d.problems.length > 0} onClick={() => void publish()} data-testid="publish"><Upload className="size-4" />Publish version</button>
@@ -308,6 +311,7 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           )}
           {view === 'preview' && <Preview org={org} name={name} updatedAt={d.updatedAt} />}
           {view === 'try' && <Try org={org} name={name} draft={d} />}
+          {view === 'signin' && <DraftOAuth org={org} name={name} updatedAt={d.updatedAt} />}
         </main>
         {/* The files, on the right, with the code only. */}
         {view === 'code' && (
@@ -344,7 +348,7 @@ function Preview({ org, name, updatedAt }: { org: string; name: string; updatedA
         Your dev install: its own data, only you see it.
         <button type="button" className="ml-auto flex items-center gap-1 hover:text-ink" onClick={() => setNonce((n) => n + 1)}><RotateCw className="size-3.5" />Reload</button>
       </div>
-      {src && <iframe key={src} src={src} title={`${name} preview`} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-forms allow-same-origin allow-popups" data-testid="preview-frame" />}
+      {src && <iframe key={src} src={src} title={`${name} preview`} className="min-h-0 flex-1 border-0 bg-white" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox" data-testid="preview-frame" />}
     </div>
   );
 }
@@ -373,7 +377,7 @@ function Try({ org, name, draft }: { org: string; name: string; draft: AppDraft 
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto bg-white p-4 text-sm">
-      <p className="text-xs text-muted">Runs a tool as an agent would call it, in your dev install: its own data, no internet.</p>
+      <p className="text-xs text-muted">Runs a tool as an agent would call it, in your dev install: its own data, and only the outside hosts an admin approved for the installed app.</p>
       <div className="flex gap-2">
         <select className="rounded-md border border-border px-2 py-1" value={tool} onChange={(e) => setTool(e.target.value)} data-testid="try-tool">
           {tools.map((t) => <option key={t} value={t}>{t}</option>)}

@@ -17,6 +17,8 @@
 // ctx.chat     post(channelId, text): a message as the caller (needs "chat:write" in uses);
 //              file(fileId): a Chat file's name, type and size, if the caller may open it (needs "files:read")
 // ctx.members  list(), search(text): the organization's people and agents as the caller sees them (needs "members:read")
+// ctx.oauth    status(p), token(p), fetch(p, url, init), disconnect(p), start(p): the caller's sign-in to a service the
+//              manifest declares under "oauth" (§6.5); the suite keeps the client secret and the tokens
 
 /** The module's name in the app's isolate: `import { defineApp } from 'freeflow'`. */
 export const SDK_MODULE = 'freeflow';
@@ -63,6 +65,20 @@ function makeCtx(env, caller) {
     docs: { read: (path) => env.SUITE.readDocs(ticket, path) },
     chat: { post: (channelId, text) => env.SUITE.postMessage(ticket, channelId, text), file: (fileId) => env.SUITE.chatFile(ticket, String(fileId)) },
     members: { list: () => env.SUITE.members(ticket), search: (text) => env.SUITE.members(ticket, String(text ?? '')) },
+    oauth: {
+      start: (provider) => env.SUITE.oauth(ticket, 'start', String(provider)),
+      status: (provider) => env.SUITE.oauth(ticket, 'status', String(provider)),
+      token: (provider) => env.SUITE.oauth(ticket, 'token', String(provider)),
+      disconnect: (provider) => env.SUITE.oauth(ticket, 'disconnect', String(provider)),
+      // fetch with the caller's token as a bearer; the host must be in "egress". Not signed in: AppError 401.
+      fetch: async (provider, url, init = {}) => {
+        const t = await env.SUITE.oauth(ticket, 'token', String(provider));
+        if (!t) throw new AppError('not signed in to ' + provider + ': open the app and connect it first', 401);
+        const headers = new Headers(init.headers);
+        headers.set('authorization', 'Bearer ' + t.accessToken);
+        return fetch(url, { ...init, headers });
+      },
+    },
   };
 }
 
@@ -147,7 +163,10 @@ ctx.publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the m
 ctx.docs.read(path) (uses "docs:read") and ctx.chat.post(channelId, text) (uses "chat:write") act as the caller.
 ctx.members.list() and ctx.members.search(text) (uses "members:read"): the organization's people and agents as the caller sees them in Chat, no guests and no email addresses: [{ accountId, displayName, picture, kind: 'person' | 'agent' }], by name. For an assignee picker: keep the accountId; ctx.publish(..., { about: [accountId] }) can wake an assigned agent. picture is a URL the screen can show in <img> as it is, or null.
 Throw an Error (or AppError(message, status) in a route) to refuse; the message goes back as it is.
-The app reaches the internet only with fetch to the hosts in the manifest's "egress".
+The app reaches the internet only with fetch to the hosts in the manifest's "egress". A draft's preview and try_tool reach only the egress hosts an admin already approved for the installed version of the app.
+Signing people in to another service by OAuth (GitHub, Google, ...): declare it under "oauth" in the manifest. FreeFlow runs the whole sign-in and keeps the client secret and each person's token; never put a client secret in the app's files or ask a person to paste one. An owner or admin enters the client id and secret in Admin › Apps (the draft's author on the Build page, for the preview), and registers FreeFlow's one callback address, shown there, with the provider. Each person connects their own account; an agent calling a tool uses its own connection, so a tool answers "not signed in" for it unless it connected.
+  The screen: GET __freeflow/oauth/<id> → { connected, label, scope }; POST __freeflow/oauth/<id>/start → { url }: open it with window.open(url, 'oauth', 'width=600,height=750'), then check GET __freeflow/oauth/<id> every 2 seconds until connected (the sign-in window also posts { type: 'freeflow:oauth', provider, ok } to its opener; treat it only as a hint to check again); DELETE __freeflow/oauth/<id> disconnects. Use relative paths, as for the routes.
+  The server: ctx.oauth.fetch(id, url, init) calls the service with the caller's token (its host must be in "egress"); it throws AppError 401 when the caller has not connected. ctx.oauth.token(id) → { accessToken, tokenType, scope, expiresAt } or null; ctx.oauth.status(id); ctx.oauth.disconnect(id).
 ui/index.html and the other ui/ files are the screen, served on the app's own host; its scripts fetch the routes above with relative paths (fetch('api/tasks')).`;
 
 /** What the assistant and agents are told of a hosted app's manifest when they build one (§4, §9.6). */
@@ -165,6 +184,10 @@ export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hoste
               "input": { "type": "object", "properties": { "status": { "type": "string" } } }, "scopes": ["tasks:read"] }],
   "events": ["task.created", "task.assigned"],                what it publishes with ctx.publish
   "uses": ["docs:read", "chat:write", "members:read", "files:read"],  optional: what of FreeFlow it uses, as its caller
-  "egress": ["api.example.com"]                               optional: the only hosts its server may fetch
+  "egress": ["api.example.com"],                              optional: the only hosts its server may fetch
+  "oauth": [{ "id": "github", "label": "GitHub",               optional: services people sign in to (see ctx.oauth); https only
+              "authorizeUrl": "https://github.com/login/oauth/authorize",
+              "tokenUrl": "https://github.com/login/oauth/access_token",
+              "scopes": ["read:user", "repo"] }]                 the scopes asked for; put the service's API host (api.github.com) in "egress"
 }
 Files: server.js (one ES module, with the SDK), migrations/0001_name.sql (applied once each in order; add a new file for a change, never edit an applied one), ui/index.html and other ui/ files.`;
