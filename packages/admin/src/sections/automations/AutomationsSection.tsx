@@ -193,7 +193,7 @@ export function AutomationsSection({
         ) : (
           <ul className="divide-y divide-hairline">
             {subs.map((s) => (
-              <SubscriptionRow key={s.id} sub={s} workspaceId={workspaceId} names={names} onDeleted={load} />
+              <SubscriptionRow key={s.id} sub={s} workspaceId={workspaceId} names={names} onChanged={load} />
             ))}
           </ul>
         )}
@@ -202,7 +202,7 @@ export function AutomationsSection({
   );
 }
 
-function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: SubscriptionDTO; workspaceId: string; names: Names; onDeleted: () => Promise<void> }) {
+function SubscriptionRow({ sub, workspaceId, names, onChanged }: { sub: SubscriptionDTO; workspaceId: string; names: Names; onChanged: () => Promise<void> }) {
   const { api } = useBoundApi();
   const [confirming, setConfirming] = useState(false);
   const selfWake = sub.schedule?.every === 'once';
@@ -217,11 +217,42 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
     setError(null);
     try {
       await api('DELETE', `/v1/events/subscriptions/${encodeURIComponent(sub.id)}?${ws}`);
-      await onDeleted();
+      await onChanged();
     } catch (err) {
       setError(errorText(err));
       setBusy(false);
       setConfirming(false);
+    }
+  };
+
+  // Edit: its name, and a wake's prompt or a post's message (what it listens to and whom it wakes stay).
+  const action = sub.action;
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(sub.name);
+  const [editText, setEditText] = useState(action?.kind === 'wake' ? action.prompt : action?.kind === 'post' ? action.body : '');
+  const startEdit = () => {
+    setEditName(sub.name);
+    setEditText(action?.kind === 'wake' ? action.prompt : action?.kind === 'post' ? action.body : '');
+    setError(null);
+    setEditing(true);
+  };
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const change: Record<string, string> = {};
+      if (editName.trim() && editName.trim() !== sub.name) change.name = editName.trim();
+      if (action?.kind === 'wake' && editText.trim() && editText.trim() !== action.prompt) change.prompt = editText.trim();
+      if (action?.kind === 'post' && editText.trim() && editText.trim() !== action.body) change.body = editText.trim();
+      if (Object.keys(change).length) {
+        await api('PATCH', `/v1/events/subscriptions/${encodeURIComponent(sub.id)}?${ws}`, change);
+        await onChanged();
+      }
+      setEditing(false);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -290,6 +321,15 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
               {started ? 'Running…' : 'Run now'}
             </button>
           )}
+          {action && !selfWake && !confirming && !editing && (
+            <button
+              data-testid={`automation-edit-${sub.id}`}
+              className="rounded border border-border px-2.5 py-1 text-xs hover:bg-hover"
+              onClick={startEdit}
+            >
+              Edit
+            </button>
+          )}
           {confirming ? (
             <span className="inline-flex items-center gap-2">
               <span className="text-xs text-muted">{selfWake ? 'Cancel this wake?' : 'Delete?'}</span>
@@ -316,6 +356,31 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
           )}
         </div>
       </div>
+      {editing && action && (
+        <div data-testid={`automation-editor-${sub.id}`} className="mt-2 flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Name
+            <input data-testid={`automation-edit-name-${sub.id}`} className={inputCls} value={editName} maxLength={100} onChange={(e) => setEditName(e.target.value)} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            {action.kind === 'wake' ? 'What the agent is asked to do' : 'The message posted'}
+            <textarea data-testid={`automation-edit-text-${sub.id}`} rows={action.kind === 'wake' ? 6 : 3} className={inputCls} value={editText} maxLength={4000} onChange={(e) => setEditText(e.target.value)} />
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              data-testid={`automation-edit-save-${sub.id}`}
+              className="rounded bg-accent px-2.5 py-1 text-xs font-semibold text-white hover:bg-accent-deep disabled:opacity-50"
+              disabled={busy || !editName.trim() || !editText.trim()}
+              onClick={() => void save()}
+            >
+              Save
+            </button>
+            <button className="text-xs text-muted hover:underline" disabled={busy} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
       {sub.delivery === 'wake' && (
         <div className="mt-1">

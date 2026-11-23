@@ -137,6 +137,30 @@ describe('the automations list', () => {
     expect($('automation-run-s-sched')!.textContent).toBe('Run now');
   });
 
+  it("edits a wake's name and prompt, sending only what changed, then reloads", async () => {
+    await mount();
+    await click('automation-edit-s-wake');
+    expect(($('automation-edit-text-s-wake') as HTMLTextAreaElement).value).toBe('Summarize {{data}}');
+    await change('automation-edit-text-s-wake', 'Summarize in two lines: {{data}}');
+    await click('automation-edit-save-s-wake');
+    await flush();
+    const patch = api.mock.calls.find(([m]) => m === 'PATCH');
+    expect(patch).toEqual(['PATCH', '/v1/events/subscriptions/s-wake?workspace=w1', { prompt: 'Summarize in two lines: {{data}}' }]);
+    expect($('automation-editor-s-wake')).toBeNull();
+    expect(api.mock.calls.filter(([m, p]) => m === 'GET' && String(p).startsWith('/v1/events/subscriptions')).length).toBe(2);
+  });
+
+  it("edits a post's message; an agent's wake for itself has no Edit", async () => {
+    await mount([...subs, { ...base, id: 's-self', name: 'Remind me', consumer: 'acct-botty', filter: { types: ['schedule.tick'] }, delivery: 'wake', createdBy: 'acct-botty', action: { kind: 'wake', prompt: 'Remind' }, schedule: { id: 'sc2', every: 'once', timezone: 'UTC', nextAt: '' } }]);
+    expect($('automation-edit-s-self')).toBeNull();
+    await click('automation-edit-s-post');
+    await change('automation-edit-name-s-post', 'Echo reactions');
+    await change('automation-edit-text-s-post', 'Someone reacted');
+    await click('automation-edit-save-s-post');
+    await flush();
+    expect(api.mock.calls.find(([m]) => m === 'PATCH')![2]).toEqual({ name: 'Echo reactions', body: 'Someone reacted' });
+  });
+
   it('deletes after a confirm, then reloads', async () => {
     await mount();
     await click('automation-delete-s-post');

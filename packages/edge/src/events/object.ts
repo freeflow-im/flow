@@ -4,7 +4,7 @@
 // sets off (`wake` jobs, through the `flow-jobs` Queue, and `post`s), and the alarm that keeps the retention window and
 // fires the schedules.
 import { DurableObject } from 'cloudflare:workers';
-import { ALERT_CLOSED, ALERT_CREATED, type AgentJobDTO, type AlertDTO, type JobState, type PlatformEvent, type SubscriptionDTO, type HostedRuntimeDTO } from '@flow/shared';
+import { ALERT_CLOSED, ALERT_CREATED, type AgentJobDTO, type AlertDTO, type JobState, type PlatformEvent, type SubscriptionAction, type SubscriptionDTO, type HostedRuntimeDTO } from '@flow/shared';
 import { EventsCore, renderTemplate, type CappedWake, type EventStats, type JobCheck, type NewSelfWake, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
 import type { Org } from '../org/object';
 
@@ -142,6 +142,10 @@ export class Events extends DurableObject<EventsEnv> {
   }
 
   /** An agent's wake for itself (core.scheduleSelfWake); a SelfWakeError's `code` and message say why it was refused. */
+  updateSubscription(id: string, change: { name?: string; action?: SubscriptionAction }): SubscriptionDTO | null {
+    return this.core.updateSubscription(id, change);
+  }
+
   async scheduleSelfWake(w: NewSelfWake): Promise<SubscriptionDTO | { refused: string; message: string }> {
     let sub: SubscriptionDTO;
     try {
