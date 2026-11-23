@@ -6,6 +6,7 @@
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
+import { playJoinChime } from '../lib/chime';
 import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
@@ -494,6 +495,8 @@ export function Room({ meetingRef }: { meetingRef: string }) {
       client.current = c;
       info.current = room;
       setPhase({ kind: 'in', client: c, info: room });
+      // A chime says the join has finished (lib/chime.ts).
+      void playJoinChime();
     } catch (e) {
       if (mounted.current) setPhase({ kind: 'error', message: joinError(e) });
     }
