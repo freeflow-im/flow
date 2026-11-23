@@ -2,7 +2,7 @@
 // holds the metadata. Who may read or change a file is server/access.ts.
 import { newFileId } from './ids.ts';
 import { closeSync, openSync, readSync } from '#runtime/fs';
-import { copyFile, mkdir, rename, rm, stat, writeFile } from '#runtime/fsp';
+import { copyFile, mkdir, rename, rm, stat, writeFile, writeStream } from '#runtime/fsp';
 import path from 'node:path';
 import { MAX_TEXT_EDIT_BYTES, type StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
@@ -140,6 +140,24 @@ export class FileStore {
     this.db
       .prepare('INSERT INTO stored_files (id, owner_id, workspace_id, private, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, c.owner_id, c.workspace_id, c.private, filename, folder, type, data.length, row.created_at);
+    syncOrgGrant(this.db, 'file', id, c, c.owner_id);
+    return this.meta(row);
+  }
+
+  /**
+   * A file made from a stream of `size` bytes (a meeting's recording, which can be too big to hold in memory: Meet phase 4).
+   * As `create`, but the bytes go straight to storage.
+   */
+  async createFromStream(scope: ScopeArg, filename: string, type: string, body: ReadableStream<Uint8Array>, size: number, folder = ''): Promise<StoredFile> {
+    const id = this.newId();
+    const c = scopeColumns(scope);
+    const target = path.join(this.dir, id);
+    await writeStream(`${target}.tmp`, body, size);
+    await rename(`${target}.tmp`, target);
+    const row = { id, filename, folder, type, size, created_at: new Date().toISOString(), ...c };
+    this.db
+      .prepare('INSERT INTO stored_files (id, owner_id, workspace_id, private, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, c.owner_id, c.workspace_id, c.private, filename, folder, type, size, row.created_at);
     syncOrgGrant(this.db, 'file', id, c, c.owner_id);
     return this.meta(row);
   }

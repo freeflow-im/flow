@@ -120,6 +120,13 @@
       "when": 1794961066551,
       "tag": "0016_app_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1795398676681,
+      "tag": "0017_meeting_recordings",
+      "breakpoints": true
     }
   ]
 }

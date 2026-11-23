@@ -16,6 +16,14 @@ export async function readFile(file: string, encoding?: string | { encoding?: st
 export async function writeFile(file: string, data: string | Uint8Array): Promise<void> {
   await docsContext().bucket.put(keyOf(file), data);
 }
+/**
+ * A file written from a stream of `size` bytes, never held whole in memory (a meeting's recording can be larger than the
+ * Worker's memory). R2 needs the length up front, which FixedLengthStream gives it.
+ */
+export async function writeStream(file: string, body: ReadableStream<Uint8Array>, size: number): Promise<void> {
+  const sized = body.pipeThrough(new FixedLengthStream(size));
+  await docsContext().bucket.put(keyOf(file), sized.readable as ReadableStream);
+}
 export async function rename(from: string, to: string): Promise<void> {
   const { bucket } = docsContext();
   const o = await bucket.get(keyOf(from));
@@ -43,7 +51,7 @@ export async function readdir(dir: string): Promise<string[]> {
   const listed = await docsContext().bucket.list({ prefix, delimiter: '/' });
   return listed.objects.map((o) => o.key.slice(prefix.length));
 }
-export default { readFile, writeFile, rename, copyFile, unlink, rm, mkdir, access, stat, readdir };
+export default { readFile, writeFile, writeStream, rename, copyFile, unlink, rm, mkdir, access, stat, readdir };
 
 /** A handle that reads a slice of an R2 object, for code that looks at the start of a file before reading the rest. */
 export async function open(file: string, _flags?: string): Promise<{

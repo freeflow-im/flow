@@ -27,6 +27,7 @@ import { startOrJoinRing } from './huddleInvites.js';
 import { toChannelDTO } from './channels.js';
 import { postMeetingStartedLine } from './messages.js';
 import { addMeetingGuestVisitor, endMeetingVisits } from './visitors.js';
+import { handleRecordingUpdate, handleTranscript, type RecordingWebhook, type TranscriptWebhook } from './meetingRecordings.js';
 
 const HOST_PRESET = 'group_call_host';
 const MEMBER_PRESET = 'group_call_participant';
@@ -51,7 +52,7 @@ export function newMeetingCode(random: (n: number) => Uint8Array = (n) => crypto
   return `${letters.slice(0, 3).join('')}-${letters.slice(3, 7).join('')}-${letters.slice(7).join('')}`;
 }
 
-type MeetingRow = typeof schema.meetings.$inferSelect;
+export type MeetingRow = typeof schema.meetings.$inferSelect;
 type ChannelRow = typeof schema.channels.$inferSelect;
 
 function requireMeet(): { accountId: string; appId: string; token: string } {
@@ -61,7 +62,7 @@ function requireMeet(): { accountId: string; appId: string; token: string } {
 }
 
 /** One call to RTK's REST API. Returns `data`, or null for a 404 (no active session); anything else that fails throws. */
-async function rtk<T>(method: string, path: string, body?: unknown): Promise<T | null> {
+export async function rtk<T>(method: string, path: string, body?: unknown): Promise<T | null> {
   const { accountId, appId, token } = requireMeet();
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}${path}`, {
     method,
@@ -91,13 +92,13 @@ const toDTO = (m: MeetingRow): MeetingDTO => ({
 });
 
 /** Who may be in a room: any member of its organization, and for a huddle, whoever may be in that conversation. */
-async function requireRoomAccess(m: MeetingRow, userId: string): Promise<void> {
+export async function requireRoomAccess(m: MeetingRow, userId: string): Promise<void> {
   await requireMembership(m.workspaceId, userId);
   if (m.channelId) await requireHuddleEligible(m.channelId, userId);
 }
 
 /** A room by its link: the short code, or the id (older links). */
-async function meetingRow(ref: string): Promise<MeetingRow> {
+export async function meetingRow(ref: string): Promise<MeetingRow> {
   const where = CODE_SHAPE.test(ref) ? eq(schema.meetings.code, ref) : or(eq(schema.meetings.id, ref), eq(schema.meetings.code, ref));
   const [m] = await db.select().from(schema.meetings).where(where).limit(1);
   if (!m) throw notFound('meeting not found');
@@ -482,18 +483,22 @@ export async function startHuddle(channelId: string, userId: string): Promise<Hu
 }
 
 /**
- * A RealtimeKit webhook, already verified by the Worker (routes/org.ts). Huddles drop who left; a meeting's chat gets its
- * date line on meeting.started (if a join has not already posted it) and ends its guests' visits on meeting.ended.
+ * A RealtimeKit webhook, already verified by the Worker (routes/org.ts). A recording or transcript is noted for the copy
+ * to Docs (phase 4). Huddles drop who left; a meeting's chat gets its date line on meeting.started (if a join has not
+ * already posted it) and ends its guests' visits on meeting.ended.
  */
 export async function handleRtkWebhook(event: {
   event?: string;
-  meeting?: { id?: string };
+  meeting?: { id?: string; sessionId?: string };
   participant?: { customParticipantId?: string };
-}): Promise<void> {
+} & RecordingWebhook & TranscriptWebhook): Promise<void> {
   const rtkMeetingId = event.meeting?.id;
   if (!rtkMeetingId) return;
   const [m] = await db.select().from(schema.meetings).where(eq(schema.meetings.rtkMeetingId, rtkMeetingId)).limit(1);
   if (!m) return;
+  // Recording (phase 4): for every room, huddle or not. The copy to Docs is the alarm's (meetingRecordings.ts).
+  if (event.event === 'recording.statusUpdate') return void (await handleRecordingUpdate(m, event));
+  if (event.event === 'meeting.transcript') return void (await handleTranscript(m, event));
   if (!m.channelId) {
     if (!m.chatChannelId) return;
     const [chat] = await db.select().from(schema.channels).where(eq(schema.channels.id, m.chatChannelId)).limit(1);

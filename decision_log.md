@@ -2184,7 +2184,7 @@ one-recipient MCP correction).
 - **Anyone in a meeting can turn recording on** (operator ruling). Recording always makes a transcript too.
 - **Recordings and transcripts are stored in Docs**, in a global **Meetings** folder in Organization files, one folder
   per meeting session (operator ruling). This is Meet phase 4.
-- **A private huddle's folder is open only to the members who attended** (operator ruling): huddles from a DM,
-  group DM or private channel. Other meetings' folders are open to the whole organization.
+- **Every meeting's folder is open to the whole organization, private huddles included** (operator ruling). An
+  attendees-only folder was asked for first, but Docs gives every folder under Organization files the `org` grant.
 - **Summaries come from agents in phase 5** (operator ruling): an agent joins, turns recording on itself, and
   afterwards writes the meeting notes into the meeting's folder. RTK's own summary is not used.

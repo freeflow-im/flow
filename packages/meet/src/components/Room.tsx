@@ -5,8 +5,8 @@
 // own page in a frame: lib/chat.ts). Built on the RealtimeKit core SDK with our own
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import RealtimeKitClient, { type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
-import { Check, ChevronLeft, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff, X } from 'lucide-react';
+import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
+import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
@@ -75,6 +75,24 @@ function useRoomUpdates(client: Client): void {
     };
   }, [client]);
 }
+
+/**
+ * The room's recording, as RealtimeKit tells everyone in it (ruling R7: a badge for all while it is on). The server starts
+ * and stops it (ruling R8), so this only listens.
+ */
+export function useRecordingState(client: Client): RecordingState {
+  const [state, setState] = useState<RecordingState>(client.recording.recordingState);
+  useEffect(() => {
+    const onUpdate = (s: RecordingState) => setState(s);
+    client.recording.on('recordingUpdate', onUpdate);
+    setState(client.recording.recordingState);
+    return () => void client.recording.off('recordingUpdate', onUpdate);
+  }, [client]);
+  return state;
+}
+
+/** Whether a recording is running or about to (the badge shows, the button offers Stop). */
+export const isRecording = (s: RecordingState) => s === 'RECORDING' || s === 'STARTING' || s === 'PAUSED';
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?';
@@ -200,6 +218,18 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
       setMediaError(`Could not ${next ? 'lock' : 'unlock'} the meeting: ${e instanceof Error ? e.message : String(e)}`);
     });
   };
+  const recording = useRecordingState(client);
+  const recordingOn = isRecording(recording);
+  // Waiting on our server's answer, so a second click does not start or stop twice.
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const toggleRecording = () => {
+    if (recordingBusy || recording === 'STOPPING') return;
+    setRecordingBusy(true);
+    setMediaError(null);
+    (recordingOn ? api.stopRecording(info.ref) : api.startRecording(info.ref))
+      .catch((e: unknown) => setMediaError(`Could not ${recordingOn ? 'stop' : 'start'} recording: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setRecordingBusy(false));
+  };
   const self = client.self;
   const others = client.participants.joined.toArray() as RTKParticipant[];
   const everyone: Person[] = [self, ...others];
@@ -241,6 +271,12 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         )}
         <h1 className="m-0 truncate text-base font-semibold">{info.title}</h1>
         <span className="text-sm text-[#bdc1c6]">{minutes < 1 ? 'Just joined' : `${minutes} min`}</span>
+        {recordingOn && (
+          <span role="status" className="flex items-center gap-1.5 rounded-full bg-[#3c1e1e] px-2.5 py-0.5 text-sm text-[#f28b82]">
+            <span className="size-2 rounded-full bg-[#ea4335]" aria-hidden="true" />
+            {recording === 'STARTING' ? 'Recording starts…' : 'Recording'}
+          </span>
+        )}
         {locked && !canLock && (
           <span className="flex items-center gap-1 text-sm text-[#bdc1c6]">
             <Lock size={14} aria-hidden="true" />
@@ -357,6 +393,16 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         <ControlButton label={self.screenShareEnabled ? 'Stop sharing' : 'Share screen'} on={self.screenShareEnabled} onClick={() => act('share the screen', () => (self.screenShareEnabled ? self.disableScreenShare() : self.enableScreenShare()))}>
           <MonitorUp size={22} />
         </ControlButton>
+        {/* Anyone in the room who is a member can record (ruling R8); a guest sees the badge only. */}
+        {!info.guest && (
+          <ControlButton
+            label={recordingOn ? 'Stop recording' : 'Record (saves the video and a transcript to Docs › Meetings)'}
+            on={recordingOn}
+            onClick={toggleRecording}
+          >
+            {recordingOn ? <Square size={20} fill="currentColor" /> : <Circle size={22} />}
+          </ControlButton>
+        )}
         <ControlButton label="People" on={panel === 'people'} onClick={() => toggle('people')}>
           <Users size={22} />
         </ControlButton>

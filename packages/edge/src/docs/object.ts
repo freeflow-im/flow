@@ -9,7 +9,7 @@ import { insertRows, tableCounts } from '../importing';
 import { setBrowserLauncher } from '@flow/docs/server/runtime/workerd/browser.ts';
 import { setOcrBinding } from '@flow/docs/server/runtime/workerd/pdfOcr.ts';
 import type { McpRequestCaller, suiteHub } from './mcp.ts';
-import type { FileHub } from '@flow/docs/plugin/server/files.ts';
+import type { FileHub, FileHubOptions } from '@flow/docs/plugin/server/files.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
 import { addressOf } from '@flow/shared/addresses';
 import type { FileChange, GrantChange } from '@flow/docs/server/app.ts';
@@ -36,6 +36,12 @@ export interface DocsEnv {
 }
 const BASE = '/docs';
 
+/** A file Meet saved in Docs: its id and its address in the suite. */
+export interface SavedMeetingFile {
+  id: string;
+  url: string;
+}
+
 /** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
 export const FILE_CHANGED_EVERY_MS = 30_000;
 
@@ -46,6 +52,8 @@ export class Docs extends DurableObject<DocsEnv> {
   private readonly ready: Promise<unknown>;
   /** The MCP endpoint's view of this object's stores (plugin/server/worker.ts), made once the app has opened them. */
   private hub: FileHub | null = null;
+  /** The app's own stores, as the app handed them over (the `stores` hook): Meet's recordings write through them. */
+  private stores: FileHubOptions | null = null;
   /** When each file last published `docs.file.changed` (in memory: an evicted object may publish one more). */
   private readonly changedAt = new Map<string, number>();
   /** Owners' accounts in an organization, asked of the directory once each. */
@@ -109,6 +117,7 @@ export class Docs extends DurableObject<DocsEnv> {
         onGrantChange: (change: GrantChange) => this.reportGrant(change),
         onFileChanged: (change: FileChange) => this.fileChanged(change),
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
+          this.stores = stores;
           this.hub = mcp.suiteHub(stores, `${base}/docs`);
         },
         // The assistant is the account's Assistant object (src/assistant/object.ts): no chats, settings or usage here.
@@ -323,6 +332,43 @@ export class Docs extends DurableObject<DocsEnv> {
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
   async mcpImport(request: Request, organizationId: string): Promise<Response> {
     return this.inOrganization(organizationId, () => this.lazy!.mcp.handleMcpImport(request, this.hub!));
+  }
+
+  /**
+   * A meeting's files (Meet phase 4, docs/specs/meetings.md R9), saved in Organization files under `folder` (made with its
+   * parents when missing), owned by `owner` (who pressed Record). The recording is streamed from RealtimeKit's download
+   * address straight to storage, never held in memory; the transcript is a Markdown document. Each comes back with its
+   * address in the suite.
+   */
+  async saveMeetingFiles(
+    organizationId: string,
+    owner: { userId: string; email: string },
+    input: { folder: string; video?: { url: string; filename: string }; markdown?: { title: string; text: string } },
+  ): Promise<{ folderUrl: string; video?: SavedMeetingFile; markdown?: SavedMeetingFile }> {
+    return this.inOrganization(organizationId, async () => {
+      const stores = this.stores;
+      if (!stores?.files || !stores.folders || !stores.sheets) throw new Error('Docs stores are not ready');
+      this.lazy!.mcp.mirrorUser(owner.userId, owner.email);
+      const scope = { ownerId: owner.userId, workspaceId: organizationId, private: false };
+      stores.folders.create(scope, input.folder);
+      const out: { folderUrl: string; video?: SavedMeetingFile; markdown?: SavedMeetingFile } = {
+        folderUrl: `/docs/?folder=${encodeURIComponent(input.folder)}&org=${encodeURIComponent(organizationId)}`,
+      };
+      if (input.video) {
+        const res = await fetch(input.video.url);
+        const size = Number(res.headers.get('content-length'));
+        if (!res.ok || !res.body || !Number.isFinite(size) || size <= 0) throw new Error(`recording download failed: ${res.status}`);
+        const type = res.headers.get('content-type')?.split(';')[0]?.trim() || 'video/mp4';
+        const f = await stores.files.createFromStream(scope, input.video.filename, type.startsWith('video/') ? type : 'video/mp4', res.body, size, input.folder);
+        out.video = { id: f.id, url: addressOf({ organizationId, app: 'docs', kind: 'file', id: f.id }) ?? `/docs/f/${f.id}` };
+      }
+      if (input.markdown) {
+        const { newMarkdownDoc } = await import('@flow/docs/shared/markdown.ts');
+        const m = await stores.sheets.createMarkdown(scope, input.markdown.title, newMarkdownDoc(input.markdown.text), input.folder);
+        out.markdown = { id: m.id, url: addressOf({ organizationId, app: 'docs', kind: 'sheet', id: m.id }, 'markdown') ?? `/docs/s/${m.id}` };
+      }
+      return out;
+    });
   }
 
   private async inOrganization<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {

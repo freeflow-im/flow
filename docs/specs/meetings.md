@@ -55,7 +55,7 @@ webhooks, recording, Meeting AI, Agent Participant and its capability matrix, au
 | R6 | **Delete agent voice calls in DM huddles** (the bridge's LiveKit voice session). It never worked well; not a "later" item. |
 | R7 | **Recording and transcripts off by default**, one click to turn on, a badge for everyone while on (was P1). |
 | R8 | **Anyone in the meeting can turn recording on** (2026-11-22). Recording always makes a transcript too; there is no separate transcribe button. |
-| R9 | **Recordings live in Docs** (2026-11-22): a global **Meetings** folder in the organization's Organization files, one folder per meeting session, holding the recording (video + audio) and the transcript. A huddle from a DM, group DM or private channel gets a folder that only the members who attended can open (a folder grant per attendee, no `org` grant); other meetings' folders are open to the whole organization. |
+| R9 | **Recordings live in Docs** (2026-11-22): a global **Meetings** folder in the organization's Organization files, one folder per meeting session, holding the recording (video + audio) and the transcript. Every meeting's folder is open to the whole organization, private huddles included (2026-11-22: Docs cannot keep an attendees-only folder inside Organization files). |
 | R10 | **Summaries come from agents, in phase 5** (2026-11-22): an agent can join a meeting, turn recording on itself, and afterwards write the meeting notes into the meeting's folder. Phase 4 makes no summary. |
 
 Still open (proposed):
@@ -132,7 +132,8 @@ Still open (proposed):
 - **The meeting's folder** (R9): `Meetings/<date> <title>/` in Organization files, made when recording first starts
   in a session. It holds `Recording.mp4` (everyone's video and audio in one file) and `Transcript` (a Markdown doc:
   speaker, time, words), and in phase 5 the agent's `Notes`. Files stay until someone deletes them.
-  A private huddle's folder (DM, group DM, private channel) is open only to the members who attended.
+  Every member of the organization can open every meeting's folder, private huddles included. The person who pressed
+  Record owns the files.
 - A **meeting page** in Meet's "Past" list: date, length, who came, links to the folder's files, and the chat.
 - The summary goes back where the meeting came from: the Chat huddle card, the calendar event (a link in its
   description).

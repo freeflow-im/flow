@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Recording a meeting is on web and desktop only (2026-11-22, Meet phase 4, Taskboard task 28).** The Record button and badge are in the Meet room, which macOS and iOS open in the browser; the saved video and transcript are ordinary Docs files and the chat line reaches every client (closes with Meet phase 6, native call screens).
 - **Choosing among several organization models, and pinning an agent to one, is in web Admin only (2026-11-22, Taskboard task 26).** Every client's agents run on the pinned or default model, because the server resolves it; macOS and iOS have no Admin (deliberate, as for the rest of Admin).
 - **Agent alerts (`show_alert`) show on web only (2026-11-22).** The cards come from the suite bar, whose alert socket signs in with the same-origin session cookie; macOS and iOS have no suite bar, and the desktop shell (served from `app://flow`) is not checked (gap to close: native cards or APNs pushes, and a token sign-in for the desktop shell's socket).
 - **Chat's address names the organization and channel on web and the desktop shell only (2026-11-22, Taskboard task 24).** `/chat/<org-slug>/<channel>`; macOS and iOS have no address bar, and their share and deep links still use `?open=channel:<id>`, which keeps working (deliberate, unless native apps learn to open these paths).

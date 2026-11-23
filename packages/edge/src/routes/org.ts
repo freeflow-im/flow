@@ -114,7 +114,8 @@ orgRoutes.get('/v1/config', (c) => {
 /**
  * RealtimeKit's webhook names its own meeting id, which the organization's object indexed when it made the room
  * (object.ts `_index_meeting_rtk`). The signature is checked here, so an unsigned request never wakes an object; a
- * meeting that is not ours is acknowledged and dropped, so RealtimeKit does not retry it. Only huddles use it.
+ * meeting that is not ours is acknowledged and dropped, so RealtimeKit does not retry it. Huddles, meeting chats and
+ * recordings (Meet phase 4: recording.statusUpdate, meeting.transcript) use it.
  */
 orgRoutes.post('/v1/rtk/webhook', async (c) => {
   const body = await c.req.text();

@@ -153,3 +153,19 @@ describe('the migration', () => {
     db2.close();
   });
 });
+
+describe('a file made from a stream (Meet recordings, FileStore.createFromStream)', () => {
+  const stream = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes.subarray(0, 4)); c.enqueue(bytes.subarray(4)); c.close(); } });
+  it('lands in Organization files, in its folder, with its bytes, for every member', async () => {
+    const bytes = new Uint8Array(Buffer.from('0123456789'));
+    folders.create(shared, 'Meetings/2026-11-22 Weekly planning');
+    const f = await files.createFromStream(shared, 'Recording.mp4', 'video/mp4', stream(bytes), bytes.length, 'Meetings/2026-11-22 Weekly planning');
+    expect(f).toMatchObject({ filename: 'Recording.mp4', type: 'video/mp4', size: 10, folder: 'Meetings/2026-11-22 Weekly planning' });
+    expect(files.listIn(shared, 'Meetings/2026-11-22 Weekly planning').map((x) => x.id)).toEqual([f.id]);
+    expect(files.get(bob, f.id)?.meta.id).toBe(f.id);
+    expect(files.get(dave, f.id)).toBeNull();
+  });
+  it('refuses a stream shorter or longer than it said', async () => {
+    await expect(files.createFromStream(shared, 'short.mp4', 'video/mp4', stream(new Uint8Array(6)), 10)).rejects.toThrow(/expected 10 bytes/);
+  });
+});
