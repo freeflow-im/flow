@@ -11,6 +11,7 @@ import {
   clock,
   folderDate,
   meetingFolder,
+  parseTranscript,
   MEETING_FILES_DUE_SQL,
   saveDueMeetingFiles,
   setMeetingDocs,
@@ -133,6 +134,17 @@ describe('folder names and the transcript', () => {
     expect(md).toBe('# Transcript · Weekly planning\n\n2026-11-22\n\n**Ann Lee** · 0:01\nHello everyone. Shall we start?\n\n**Ben Kim** · 1:05\nYes.\n');
     expect(transcriptMarkdown('X', 'd', [])).toContain('_Nothing was said._');
   });
+
+  it('reads RTK\'s transcript as JSON or as its header-less CSV, and an empty file as nothing said', () => {
+    const csv = '"1000","peer-1","user-1","cpi-1","Ann Lee","Hello, everyone"\n"3000","peer-2","user-2","cpi-2","Ben ""B"" Kim","Hi Ann"\n';
+    expect(parseTranscript(csv)).toEqual([
+      { startTime: 1000, sentence: 'Hello, everyone', peerData: { displayName: 'Ann Lee' } },
+      { startTime: 3000, sentence: 'Hi Ann', peerData: { displayName: 'Ben "B" Kim' } },
+    ]);
+    expect(parseTranscript('[{"startTime":5,"sentence":"Yo","peerData":{"displayName":"Eve"}}]')).toEqual([{ startTime: 5, sentence: 'Yo', peerData: { displayName: 'Eve' } }]);
+    expect(parseTranscript('')).toEqual([]);
+    expect(parseTranscript('[]')).toEqual([]);
+  });
 });
 
 describe('starting and stopping', () => {
@@ -149,6 +161,19 @@ describe('starting and stopping', () => {
     const row = sqlite.prepare('SELECT session_id, started_by, status, folder FROM meeting_recordings WHERE id = ?').get('rec-1') as Record<string, string>;
     expect(row).toMatchObject({ session_id: 'sess-1', started_by: BEN, status: 'INVOKED' });
     expect(row.folder).toMatch(/^Meetings\/\d{4}-\d{2}-\d{2} Weekly planning$/);
+  });
+
+  it('keeps a second recording of a session in its folder, and gives a later session that day its own', async () => {
+    fakeDocs();
+    const m = await room({ ...RUNNING_ROOM, 'POST /recordings': { id: 'rec-1', session_id: 'sess-1', status: 'INVOKED' } });
+    await withDb(db, () => startRecording(m.code, BEN));
+    fakeRtk({ ...RUNNING_ROOM, 'POST /recordings': { id: 'rec-2', session_id: 'sess-1', status: 'INVOKED' } });
+    await withDb(db, () => startRecording(m.code, ANN));
+    fakeRtk({ ...RUNNING_ROOM, 'GET /meetings/rtk-m1/active-session': { id: 'sess-2' }, 'POST /recordings': { id: 'rec-3', session_id: 'sess-2', status: 'INVOKED' } });
+    await withDb(db, () => startRecording(m.code, ANN));
+    const folders = (sqlite.prepare('SELECT id, folder FROM meeting_recordings ORDER BY id').all() as { id: string; folder: string }[]).map((r) => r.folder);
+    expect(folders[0]).toBe(folders[1]);
+    expect(folders[2]).toBe(`${folders[0]} (2)`);
   });
 
   it('refuses a second recording, a room nobody is in, and people outside the organization', async () => {

@@ -218,7 +218,12 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
       setMediaError(`Could not ${next ? 'lock' : 'unlock'} the meeting: ${e instanceof Error ? e.message : String(e)}`);
     });
   };
-  const recording = useRecordingState(client);
+  const sdkRecording = useRecordingState(client);
+  // RealtimeKit can take several seconds to report a recording our server started: until it reports anything, the room
+  // shows what the server said (started, or already running), so the button offers Stop at once.
+  const [expected, setExpected] = useState<RecordingState | null>(null);
+  useEffect(() => setExpected(null), [sdkRecording]);
+  const recording: RecordingState = sdkRecording === 'IDLE' && expected ? expected : sdkRecording;
   const recordingOn = isRecording(recording);
   // Waiting on our server's answer, so a second click does not start or stop twice.
   const [recordingBusy, setRecordingBusy] = useState(false);
@@ -226,8 +231,13 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
     if (recordingBusy || recording === 'STOPPING') return;
     setRecordingBusy(true);
     setMediaError(null);
-    (recordingOn ? api.stopRecording(info.ref) : api.startRecording(info.ref))
-      .catch((e: unknown) => setMediaError(`Could not ${recordingOn ? 'stop' : 'start'} recording: ${e instanceof Error ? e.message : String(e)}`))
+    const stopping = recordingOn;
+    (stopping ? api.stopRecording(info.ref) : api.startRecording(info.ref))
+      .then(() => setExpected(stopping ? null : 'STARTING'))
+      .catch((e: unknown) => {
+        if (e instanceof MeetApiError && e.code === 'already_recording') return setExpected('RECORDING');
+        setMediaError(`Could not ${stopping ? 'stop' : 'start'} recording: ${e instanceof Error ? e.message : String(e)}`);
+      })
       .finally(() => setRecordingBusy(false));
   };
   const self = client.self;

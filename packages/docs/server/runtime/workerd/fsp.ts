@@ -22,7 +22,8 @@ export async function writeFile(file: string, data: string | Uint8Array): Promis
  */
 export async function writeStream(file: string, body: ReadableStream<Uint8Array>, size: number): Promise<void> {
   const sized = body.pipeThrough(new FixedLengthStream(size));
-  await docsContext().bucket.put(keyOf(file), sized.readable as ReadableStream);
+  const put = await docsContext().bucket.put(keyOf(file), sized);
+  if (put?.size !== size) throw new Error(`writeStream: expected ${size} bytes, stored ${put?.size ?? 0}`);
 }
 export async function rename(from: string, to: string): Promise<void> {
   const { bucket } = docsContext();

@@ -132,6 +132,8 @@ Still open (proposed):
 - **The meeting's folder** (R9): `Meetings/<date> <title>/` in Organization files, made when recording first starts
   in a session. It holds `Recording.mp4` (everyone's video and audio in one file) and `Transcript` (a Markdown doc:
   speaker, time, words), and in phase 5 the agent's `Notes`. Files stay until someone deletes them.
+  A second recording in one session goes in the same folder (`Recording 2.mp4`); another session with the same date
+  and title gets its own folder (`… (2)`). RTK's transcript covers the whole session, from when it was turned on.
   Every member of the organization can open every meeting's folder, private huddles included. The person who pressed
   Record owns the files.
 - A **meeting page** in Meet's "Past" list: date, length, who came, links to the folder's files, and the chat.

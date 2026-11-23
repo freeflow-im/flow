@@ -6,7 +6,7 @@
 //
 // Everyone in the room sees the recording badge from RealtimeKit itself (the web SDK's recordingUpdate), so nothing here
 // tells the room.
-import { and, asc, eq, isNotNull, or } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, like, or } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { ApiError } from '../lib/errors.js';
@@ -66,6 +66,50 @@ export interface TranscriptLine {
   endTime?: number;
   sentence?: string;
   peerData?: { displayName?: string; name?: string };
+}
+
+/** One CSV line's fields: every field is double-quoted, a quote inside one is doubled. */
+function csvFields(line: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '"') {
+      let v = '';
+      i++;
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') { v += '"'; i += 2; }
+        else if (line[i] === '"') { i++; break; }
+        else v += line[i++];
+      }
+      out.push(v);
+      if (line[i] === ',') i++;
+    } else {
+      const end = line.indexOf(',', i);
+      out.push(line.slice(i, end < 0 ? line.length : end));
+      i = end < 0 ? line.length : end + 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * RTK's transcript file, in either of its shapes (docs: ai/transcription, output formats). JSON: an array of
+ * { startTime, endTime, sentence, peerData }. CSV (the webhook's default): no header, each row "start ms", peer id, user
+ * id, custom participant id, name, text.
+ */
+export function parseTranscript(text: string): TranscriptLine[] {
+  const t = text.trim();
+  if (!t) return [];
+  if (t.startsWith('[') || t.startsWith('{')) {
+    const json = JSON.parse(t) as TranscriptLine[] | { transcript?: TranscriptLine[] };
+    return Array.isArray(json) ? json : (json.transcript ?? []);
+  }
+  return t.split(/\r?\n/).flatMap((line) => {
+    const f = csvFields(line);
+    const start = Number(f[0]);
+    if (f.length < 6 || !Number.isFinite(start)) return [];
+    return [{ startTime: start, sentence: f.slice(5).join(','), peerData: { displayName: f[4] } }];
+  });
 }
 
 /** `1:05` or `1:02:05`. */
@@ -137,6 +181,7 @@ export async function startRecording(ref: string, userId: string): Promise<{ ok:
     .limit(1);
   const me = await personOf(userId);
   const now = new Date();
+  const folder = earlier?.folder ?? (await freeFolder(meetingFolder(m.title, folderDate(now, me?.timezone)), sessionId));
   await db
     .insert(schema.meetingRecordings)
     .values({
@@ -146,10 +191,25 @@ export async function startRecording(ref: string, userId: string): Promise<{ ok:
       startedBy: userId,
       startedAt: now,
       status: started.status ?? 'INVOKED',
-      folder: earlier?.folder ?? meetingFolder(m.title, folderDate(now, me?.timezone)),
+      folder,
     })
     .onConflictDoNothing();
   return { ok: true, recordingId: started.id };
+}
+
+/**
+ * A session's own folder: the day's name, or with " (2)", " (3)"… when another session (a second call in the same room,
+ * or another meeting of the same name) already has it, so two sessions' files and transcripts never mix.
+ */
+async function freeFolder(base: string, sessionId: string): Promise<string> {
+  const used = await db
+    .select({ folder: schema.meetingRecordings.folder, sessionId: schema.meetingRecordings.sessionId })
+    .from(schema.meetingRecordings)
+    .where(or(eq(schema.meetingRecordings.folder, base), like(schema.meetingRecordings.folder, `${base} (%)`)));
+  const taken = new Set(used.filter((u) => u.sessionId !== sessionId).map((u) => u.folder));
+  let folder = base;
+  for (let n = 2; taken.has(folder); n++) folder = `${base} (${n})`;
+  return folder;
 }
 
 /** DELETE /v1/meetings/:id/recording: anyone in the room who is a member stops it. Nothing running is not an error. */
@@ -284,10 +344,13 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
   try {
     const owner = await personOf(row.startedBy);
     if (!owner || !docsOf) throw new Error('no owner or no Docs');
-    const res = await fetch(downloadUrl);
+    // The JSON shape when RTK gives it (the webhook's address is the CSV); else the webhook's file.
+    const asJson = row.sessionId
+      ? await rtk<{ transcript_download_url?: string }>('GET', `/sessions/${row.sessionId}/transcript?format=JSON`).catch(() => null)
+      : null;
+    const res = await fetch(asJson?.transcript_download_url ?? downloadUrl);
     if (!res.ok) throw new Error(`transcript download failed: ${res.status}`);
-    const json = (await res.json()) as TranscriptLine[] | { transcript?: TranscriptLine[] };
-    const lines = Array.isArray(json) ? json : (json.transcript ?? []);
+    const lines = parseTranscript(await res.text());
     const date = folderDate(row.startedAt, owner.timezone);
     const saved = await docsOf(m.workspaceId).saveMeetingFiles(m.workspaceId, { userId: row.startedBy, email: owner.email }, {
       folder: row.folder,
