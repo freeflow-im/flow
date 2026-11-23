@@ -83,11 +83,11 @@ export function SuiteAssistantColumn({ organizationId, page, context, intro, pro
 
 function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, context, bare = false, intro, prompts }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void; context?: Record<string, unknown>; bare?: boolean; intro?: string; prompts?: string[] }) {
   const name = chosen?.displayName ?? 'Assistant';
-  // Every agent runs on the organization's model: on hovering (or focusing) the name, which.
-  const modelTip = useModelTooltip(useAssistantModel(organizationId));
-  const avatarUrl = chosen?.avatarUrl ?? null;
   // The person's own assistant goes by no id (the routes' default); any other agent by its own.
   const agentId = chosen && !chosen.self ? chosen.id : null;
+  // What the chosen agent runs on (its pin, else the organization's default): on hovering (or focusing) the name.
+  const modelTip = useModelTooltip(useAssistantModel(organizationId, agentId));
+  const avatarUrl = chosen?.avatarUrl ?? null;
   const chat = useSuiteAssistant(organizationId, agentId, context);
   const orgPrompts = useSuggestedPrompts(organizationId, page);
   const suggestions = prompts ?? orgPrompts;

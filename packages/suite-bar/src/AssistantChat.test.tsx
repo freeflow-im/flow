@@ -62,6 +62,16 @@ describe("the panel's header", () => {
     fireEvent.blur(name);
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
+
+  it('asks for the model of the agent it talks to, which may be pinned to its own', async () => {
+    const asked = serve([{ id: 'a1', accountId: 'acc1', displayName: 'Ada', mode: 'personal', self: true }, { id: 'a2', accountId: 'acc2', displayName: 'Builder', mode: 'shared', self: false }]);
+    render(<SuiteAssistant organizationId="org1" page="home" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
+    // Their own assistant goes by no id; another agent, picked, by its own.
+    await waitFor(() => expect(asked).toContain('/api/settings/assistant?workspace=org1'));
+    fireEvent.change(await screen.findByTestId('suite-assistant-picker'), { target: { value: 'a2' } });
+    await waitFor(() => expect(asked).toContain('/api/settings/assistant?workspace=org1&agent=a2'));
+  });
 });
 
 describe('images in the panel (⌘V, drop, attach)', () => {
