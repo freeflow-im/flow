@@ -91,6 +91,21 @@ const toDTO = (m: MeetingRow): MeetingDTO => ({
   chatChannelId: m.chatChannelId ?? null,
 });
 
+/**
+ * A room made before rooms were transcribed (ruling 2026-11-23): RTK is asked to transcribe its sessions from now on.
+ * Done at a join, so it is in place for the next session if not this one. A failure only logs: the join goes on.
+ */
+async function ensureTranscribing(m: MeetingRow): Promise<void> {
+  if (m.transcribeOn) return;
+  try {
+    await rtk('PATCH', `/meetings/${m.rtkMeetingId}`, { transcribe_on_end: true });
+    await db.update(schema.meetings).set({ transcribeOn: true }).where(eq(schema.meetings.id, m.id));
+    m.transcribeOn = true;
+  } catch (err) {
+    console.warn('meeting: could not turn transcribing on', { meetingId: m.id, err: (err as Error).message });
+  }
+}
+
 /** Who may be in a room: any member of its organization, and for a huddle, whoever may be in that conversation. */
 export async function requireRoomAccess(m: MeetingRow, userId: string): Promise<void> {
   await requireMembership(m.workspaceId, userId);
@@ -110,9 +125,9 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   requireMeet();
   const [me] = await db.select({ displayName: schema.users.displayName }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   const name = (title ?? '').trim().slice(0, MAX_TITLE) || `${me?.displayName?.split(' ')[0] || 'A'}'s meeting`;
-  const created = await rtk<{ id: string }>('POST', '/meetings', { title: name });
+  const created = await rtk<{ id: string }>('POST', '/meetings', { title: name, transcribe_on_end: true });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null, locked: false };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null, locked: false, transcribeOn: true };
   await db.insert(schema.meetings).values(row);
   return toDTO({ ...row, lastJoinedAt: null, chatChannelId: null, sessionStartedAt: null });
 }
@@ -144,6 +159,7 @@ export async function getMeeting(ref: string, userId: string): Promise<MeetingDT
 export async function joinMeeting(ref: string, userId: string): Promise<MeetingJoinDTO> {
   const m = await meetingRow(ref);
   await requireRoomAccess(m, userId);
+  await ensureTranscribing(m);
   const expiresOn = tokenExpiry();
   const [existing] = await db
     .select()
@@ -383,6 +399,7 @@ export async function joinAsGuest(code: string, name: string): Promise<{ join: M
   const m = await meetingByCode(code);
   if (m.channelId) throw new ApiError(403, 'guests_not_allowed', 'This call is only for the people in its conversation.');
   if (m.locked) throw new ApiError(403, 'meeting_locked', 'This meeting is locked. Ask the host to unlock it.');
+  await ensureTranscribing(m);
   const guestId = `${GUEST_ID_PREFIX}${crypto.randomUUID()}`;
   const added = await rtk<{ id: string; token: string }>('POST', `/meetings/${m.rtkMeetingId}/participants`, {
     name: shown,
@@ -453,9 +470,9 @@ async function channelRoom(chan: { id: string; workspaceId: string; kind: string
   const [existing] = await db.select().from(schema.meetings).where(eq(schema.meetings.channelId, chan.id)).limit(1);
   if (existing) return existing;
   const title = await huddleTitle(chan, userId);
-  const created = await rtk<{ id: string }>('POST', '/meetings', { title });
+  const created = await rtk<{ id: string }>('POST', '/meetings', { title, transcribe_on_end: true });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null, locked: false, chatChannelId: null, sessionStartedAt: null };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null, locked: false, chatChannelId: null, sessionStartedAt: null, transcribeOn: true };
   try {
     await db.insert(schema.meetings).values(row);
     return row;

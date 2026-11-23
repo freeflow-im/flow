@@ -2219,3 +2219,10 @@ one-recipient MCP correction).
   preset has live transcription on, which would transcribe every meeting. Agents work from the saved transcript and the
   meeting's chat.
 - **Agents join a meeting only when someone sends them** (operator ruling): no automatic note takers in DM huddles.
+
+## 2026-11-23 — Meet transcripts: RTK transcribes every session (`docs/specs/meetings.md` R7a)
+
+- **Every Meet room is created with RTK's `transcribe_on_end` on; only a recorded session's transcript is kept**
+  (operator ruling, amends R7). A local test showed RTK makes a post-meeting transcript only when it was on before the
+  session began: turning it on when Record is pressed (phase 4's design) gave empty transcripts in production.
+  Recording stays opt-in; unrecorded sessions' transcripts are dropped by us, though RTK keeps its copy 7 days.

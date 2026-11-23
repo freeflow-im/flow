@@ -145,8 +145,15 @@
     {
       "idx": 20,
       "version": "6",
-      "when": 1795407342799,
-      "tag": "0020_app_oauth",
+      "when": 1795407969264,
+      "tag": "0020_meeting_transcribe_on",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1795408961216,
+      "tag": "0021_app_oauth",
       "breakpoints": true
     }
   ]

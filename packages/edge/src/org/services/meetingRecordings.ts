@@ -64,7 +64,10 @@ export function meetingFolder(title: string, date: string): string {
   return `${MEETINGS_FOLDER}/${date} ${name}`;
 }
 
-/** One line of RTK's transcript JSON (docs: ai/transcription). Times are milliseconds from the session's start. */
+/**
+ * One line of RTK's transcript JSON (docs: ai/transcription). The docs show times in milliseconds from the session's
+ * start; RTK in fact sends clock times in seconds (2026-11-23: `1795407720.681`). `msOf` reads either.
+ */
 export interface TranscriptLine {
   startTime?: number;
   endTime?: number;
@@ -116,6 +119,12 @@ export function parseTranscript(text: string): TranscriptLine[] {
   });
 }
 
+/** A transcript time in milliseconds: epoch seconds (RTK's real output) become milliseconds; an offset stays as it is. */
+export function msOf(t: number | undefined): number {
+  const v = t ?? 0;
+  return v > 1e9 && v < 1e11 ? v * 1000 : v;
+}
+
 /** `1:05` or `1:02:05`. */
 export function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -131,13 +140,16 @@ export function clock(ms: number): string {
  */
 export function transcriptMarkdown(title: string, date: string, lines: TranscriptLine[]): string {
   const turns: { who: string; at: number; text: string[] }[] = [];
-  for (const l of [...lines].sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0))) {
+  const sorted = [...lines].sort((a, b) => msOf(a.startTime) - msOf(b.startTime));
+  // Times are shown from the first line: clock times become 0:00, 0:07…
+  const zero = sorted.length && msOf(sorted[0]!.startTime) > 1e11 ? msOf(sorted[0]!.startTime) : 0;
+  for (const l of sorted) {
     const text = (l.sentence ?? '').trim();
     if (!text) continue;
     const who = (l.peerData?.displayName ?? l.peerData?.name ?? '').trim() || 'Someone';
     const last = turns.at(-1);
     if (last && last.who === who) last.text.push(text);
-    else turns.push({ who, at: l.startTime ?? 0, text: [text] });
+    else turns.push({ who, at: msOf(l.startTime) - zero, text: [text] });
   }
   const body = turns.map((t) => `**${t.who}** · ${clock(t.at)}\n${t.text.join(' ')}`).join('\n\n');
   return `# Transcript · ${title}\n\n${date}\n\n${body || '_Nothing was said._'}\n`;
@@ -159,8 +171,9 @@ async function activeRecording(m: MeetingRow): Promise<RtkRecording | null> {
 }
 
 /**
- * POST /v1/meetings/:id/recording (R8): anyone in the room who is a member. RTK is asked to transcribe the session at
- * its end too (R7's transcript comes with the recording), then to record. A second Record while one runs is refused.
+ * POST /v1/meetings/:id/recording (R8): anyone in the room who is a member. RTK already transcribes every session of the
+ * room (meetings.ts, ruling 2026-11-23); recording is what keeps the session's transcript. A second Record while one
+ * runs is refused.
  */
 export async function startRecording(ref: string, userId: string): Promise<{ ok: true; recordingId: string }> {
   const m = await meetingRow(ref);
@@ -169,7 +182,6 @@ export async function startRecording(ref: string, userId: string): Promise<{ ok:
   const session = await rtk<{ id: string; live_participants?: number }>('GET', `/meetings/${m.rtkMeetingId}/active-session`);
   if (!session) throw new ApiError(409, 'no_session', 'Nobody is in this meeting. Join it first.');
   if (await activeRecording(m)) throw new ApiError(409, 'already_recording', 'This meeting is already being recorded.');
-  await rtk('PATCH', `/meetings/${m.rtkMeetingId}`, { transcribe_on_end: true });
   const started = await rtk<RtkRecording>('POST', '/recordings', {
     meeting_id: m.rtkMeetingId,
     file_name_prefix: m.code ?? m.id,
@@ -275,8 +287,8 @@ export interface TranscriptWebhook {
 
 /**
  * A session's transcript (RTK webhook): noted on the session's first recording, for the alarm to save in that
- * recording's folder. A session nobody recorded has no folder, so its transcript is dropped and transcribing is turned
- * off again (R7: off by default). True when there is now something for the alarm to do.
+ * recording's folder. A session nobody recorded has no folder, so its transcript is dropped: only recording keeps one
+ * (ruling 2026-11-23). True when there is now something for the alarm to do.
  */
 export async function handleTranscript(m: MeetingRow, event: TranscriptWebhook): Promise<boolean> {
   const sessionId = event.meeting?.sessionId;
@@ -288,10 +300,7 @@ export async function handleTranscript(m: MeetingRow, event: TranscriptWebhook):
     .where(and(eq(schema.meetingRecordings.meetingId, m.id), eq(schema.meetingRecordings.sessionId, sessionId)))
     .orderBy(asc(schema.meetingRecordings.startedAt))
     .limit(1);
-  if (!first) {
-    await transcribeOffUnlessRecording(m).catch((err: Error) => console.warn('meeting transcript: could not turn transcribing off', err.message));
-    return false;
-  }
+  if (!first) return false;
   if (first.transcriptUrl) return false;
   await db.update(schema.meetingRecordings).set({ transcriptDownloadUrl: url }).where(eq(schema.meetingRecordings.id, first.id));
   return true;
@@ -369,12 +378,5 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
   } catch (err) {
     console.error('meeting transcript: could not save to Docs', { recordingId: row.id, err: (err as Error).message });
     await db.update(schema.meetingRecordings).set({ transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
-  } finally {
-    await transcribeOffUnlessRecording(m).catch((err: Error) => console.warn('meeting transcript: could not turn transcribing off', err.message));
   }
-}
-
-async function transcribeOffUnlessRecording(m: MeetingRow): Promise<void> {
-  if (await activeRecording(m)) return;
-  await rtk('PATCH', `/meetings/${m.rtkMeetingId}`, { transcribe_on_end: false });
 }
