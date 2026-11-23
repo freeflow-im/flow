@@ -61,6 +61,8 @@ export interface MailEnv {
   DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
   MAIL?: DurableObjectNamespace<Mail>;
   ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
+  /** A person's assistant's Calendar object: invitations its mailbox keeps go on its calendar (agents.md §1.1). */
+  CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
 }
 
 /** Who may mail a person's assistant, and where its turn runs: read from the directory and kept a while. */
@@ -1815,9 +1817,38 @@ export class Mail extends DurableObject<MailEnv> {
       this.left(r.id, folder, refuse);
       console.log(`[mail] assistant ${policy.agentId}: ${refuse.length} message(s) from senders not on the allowlist, moved to ${REFUSED_FOLDER}`);
     }
+    // An invitation among the kept mail goes on the assistant's own calendar, as Google puts one on a person's: "invitations
+    // to her calendar follow the same list" (agents.md §1.1). It also stays in the inbox, as any kept message.
+    await this.takeInvitations(r, folder, keep, policy).catch((err) => console.error(`[mail] assistant invitations: ${(err as Error).message}`));
     // Kept mail stays in the inbox and is published as mail.received (publishReceived): an automation on it wakes the
     // assistant, and so does its answering subscription when the sponsor turned that on (assistant/mailWake.ts).
     return keep;
+  }
+
+  /**
+   * The invitations among an assistant's kept mail, each given to its Calendar object (Calendar.receiveImip) with the
+   * screened sender: there the sender must be the event's organizer. One failing is logged and the others still go.
+   */
+  private async takeInvitations(r: AccountRow, folder: string, kept: MessageSummary[], policy: AssistantPolicy): Promise<void> {
+    const ns = this.env.CALENDAR, owner = this.cache.state('owner_account_id');
+    if (!ns || !owner) return;
+    const { invitationIndex } = await import('./received');
+    for (const m of kept) {
+      const index = invitationIndex(m.attachments);
+      const from = m.from?.address;
+      if (index === null || !from) continue;
+      try {
+        const part = await this.attachment(r, folder, m.uid, index);
+        if (part.content.length > MAX_INVITE_BYTES) { console.log(`[mail] assistant ${policy.agentId}: invitation uid ${m.uid} too large`); continue; }
+        const answer = await ns.get(ns.idFromName(owner)).receiveImip({
+          ics: part.content.toString('utf8'), fromEmail: from,
+          to: { accountId: owner, email: r.email, name: r.display_name, organizationId: policy.organizationId },
+        });
+        console.log(`[mail] assistant ${policy.agentId}: invitation uid ${m.uid} → ${answer.ok ? `${answer.action}${answer.reason ? ` (${answer.reason})` : ''}` : `refused: ${answer.code} ${answer.message}`}`);
+      } catch (err) {
+        console.error(`[mail] assistant ${policy.agentId}: invitation uid ${m.uid}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** The sponsor changed the allowlist (routes/assistant.ts): read it again, and check mail (or stop) to match. */

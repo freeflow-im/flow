@@ -32,3 +32,16 @@ export function mailReceivedEvents(p: { organizationId: string; owner: string; a
     data: { accountId: p.accountId, folder: p.folder, uid: m.uid, from: m.from, subject: m.subject, date: m.date },
   }));
 }
+
+/**
+ * The part of a message that is its invitation (as Mail's card picks it, packages/mail src/lib/invites.ts): the
+ * `text/calendar` one (Google and Outlook send it as an alternative to the text, and again as `invite.ics`), else the first
+ * iCalendar file. Its index for `attachments/:index`; null for a message with none, or whose parts are not listed.
+ */
+export function invitationIndex(attachments: readonly { index: number; mimeType: string; filename: string }[] | undefined): number | null {
+  if (!attachments) return null;
+  const type = (a: { mimeType: string }) => a.mimeType.split(';')[0]!.trim().toLowerCase();
+  const found = attachments.find((a) => type(a) === 'text/calendar')
+    ?? attachments.find((a) => ['application/ics', 'text/x-vcalendar'].includes(type(a)) || /\.ics$/i.test(a.filename));
+  return found ? found.index : null;
+}

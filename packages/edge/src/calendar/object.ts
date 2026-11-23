@@ -27,7 +27,7 @@ import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { CalDav, type Credential, type Discovery, type Driver, type Interval, type RemoteCalendar } from './drivers/caldav';
 import { googlePrincipal, refreshAccess, type GoogleClient } from './google';
 import { DAY_MS, deleteFromEvent, editEvent, itipReply, itipRequest, newEvent, organizerOf, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
-import { ITIP_METHODS, acceptCancel, acceptReply, acceptRequest, attendeeAddresses, decide, markAccounts, platformAttendees, summaryOf, type ItipMethodIn, type ResolvedAttendee } from './itip';
+import { ACCOUNT_PARAM, ITIP_METHODS, acceptCancel, acceptReply, acceptRequest, attendeeAddresses, decide, markAccounts, platformAttendees, summaryOf, type ItipMethodIn, type ResolvedAttendee } from './itip';
 import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
 import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
@@ -319,6 +319,35 @@ export class Calendar extends DurableObject<CalendarEnv> {
     } catch (err) {
       if (err instanceof ApiError) return refuse(err.statusCode, err.code, err.message);
       console.error(`[calendar] ${m.method}: ${(err as Error).message.slice(0, 200)}`);
+      return refuse(500, 'server_error', 'internal server error');
+    }
+  }
+
+  /**
+   * An invitation that came by email to a person's assistant (agents.md §1.1: "invitations to her calendar follow the same
+   * list"), by binding from its Mail object once the mailbox check kept the message: its sender is on the sponsor's
+   * allowlist and authenticated. It goes on the assistant's native calendar as `receiveItip` puts a member's, with the
+   * sender as the organizer outside the platform: a REQUEST from anyone but the event's ORGANIZER is refused. The method is
+   * the iCalendar's own. Platform account parameters are dropped first: an email never speaks for an account here.
+   */
+  async receiveImip(m: { ics: string; fromEmail: string; to: NonNullable<ItipDelivery['to']> }): Promise<ItipAnswer> {
+    const refuse = (status: number, code: string, message: string): ItipAnswer => ({ ok: false, status, code, message });
+    if (!m || typeof m.ics !== 'string' || m.ics.length > 512 * 1024 || !m.fromEmail || !m.to?.accountId) return refuse(400, 'bad_request', 'not an invitation');
+    const ics = m.ics.replace(/\r?\n[ \t]/g, '').replace(new RegExp(`;${ACCOUNT_PARAM}=("[^"]*"|[^;:\\r\\n]*)`, 'gi'), '');
+    const method = summaryOf(ics)?.method as ItipMethodIn | null | undefined;
+    if (!method || !ITIP_METHODS.includes(method)) return refuse(400, 'bad_request', 'the invitation has no method this calendar takes');
+    const account = { id: m.to.accountId, principalId: '', organizationId: m.to.organizationId } as NonNullable<CallerContext['account']>;
+    const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
+    if (wrong) { console.error(`[calendar] ${wrong}`); return refuse(500, 'wrong_account', wrong); }
+    if (this.store.state('owner_organization_id') && m.to.organizationId !== this.store.state('owner_organization_id')) return refuse(403, 'forbidden', 'another organization');
+    this.accountId = m.to.accountId;
+    this.store.ensureNative({ accountId: m.to.accountId, email: m.to.email, displayName: m.to.name });
+    if (!this.store.state('owner_account_id')) return refuse(404, 'not_found', 'no such calendar');
+    try {
+      return await timing.run({ server: 0, actor: m.to.accountId }, () => this.applyItip({ method, ics, from: { accountId: '', email: m.fromEmail.toLowerCase() } }));
+    } catch (err) {
+      if (err instanceof ApiError) return refuse(err.statusCode, err.code, err.message);
+      console.error(`[calendar] email invitation: ${(err as Error).message.slice(0, 200)}`);
       return refuse(500, 'server_error', 'internal server error');
     }
   }

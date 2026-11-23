@@ -191,3 +191,49 @@ describe('scheduling between accounts', () => {
     await expect(CALENDAR_TOOLS.find((t) => t.name === 'update_event')!.run(w.tools('bob', 'Bob'), { id: bobCopy.id, summary: 'Mine' })).rejects.toThrow(/Only the organizer.*respond_to_event/);
   });
 });
+
+// An invitation by email to a person's assistant (agents.md §1.1, Calendar.receiveImip): its Mail object kept the message
+// (allowlisted, authenticated sender) and hands over the iCalendar, as Google sends it.
+describe('invitations by email to an assistant', () => {
+  const SCOTT = 'scott@gmail.example';
+  const google = (o: { method?: string; uid?: string; seq?: number; organizer?: string; extra?: string } = {}) => [
+    'BEGIN:VCALENDAR', 'PRODID:-//Google Inc//Google Calendar 70.9054//EN', 'VERSION:2.0', 'CALSCALE:GREGORIAN', `METHOD:${o.method ?? 'REQUEST'}`,
+    'BEGIN:VEVENT', 'DTSTART:20261210T170000Z', 'DTEND:20261210T173000Z', 'DTSTAMP:20261201T100000Z',
+    `ORGANIZER;CN=Scott:mailto:${o.organizer ?? SCOTT}`, `UID:${o.uid ?? 'g1@google.com'}`,
+    `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Scott;X-NUM-GUESTS=0:mailto:${SCOTT}`,
+    `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Builder${o.extra ?? ''};X-NUM-GUESTS=0:mailto:${ADDR('bot')}`,
+    `SEQUENCE:${o.seq ?? 0}`, `STATUS:${o.method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'}`, 'SUMMARY:Budget review', 'END:VEVENT', 'END:VCALENDAR', '',
+  ].join('\r\n');
+  const to = { accountId: 'acct-bot', email: ADDR('bot'), name: 'Builder', organizationId: ORG };
+
+  it('puts it on the assistant\'s calendar, needing an answer; a cancellation marks it cancelled', async () => {
+    const w = world();
+    const bot = () => w.objects.get('acct-bot')!;
+    await w.bot('GET', '/v1/calendar/calendars');
+    let r = await bot().receiveImip({ ics: google(), fromEmail: SCOTT, to });
+    expect(r).toMatchObject({ ok: true, action: 'created' });
+    let ev = (await w.bot('GET', W)).j.events.find((e: { summary: string }) => e.summary === 'Budget review');
+    expect(ev).toMatchObject({ myResponse: 'needs-action', organizer: { email: SCOTT } });
+    expect(w.published.some((e) => e.type === 'calendar.invited')).toBe(true);
+    // The same again is ignored; a newer one updates.
+    expect(await bot().receiveImip({ ics: google(), fromEmail: SCOTT, to })).toMatchObject({ ok: true, action: 'ignored' });
+    r = await bot().receiveImip({ ics: google({ method: 'CANCEL', seq: 1 }), fromEmail: SCOTT, to });
+    expect(r).toMatchObject({ ok: true, action: 'cancelled' });
+    ev = (await w.bot('GET', W)).j.events.find((e: { summary: string }) => e.summary === 'Budget review');
+    expect(ev?.status ?? 'gone').not.toBe('confirmed');
+  });
+
+  it('refuses an invitation from anyone but its organizer, and drops platform account parameters', async () => {
+    const w = world();
+    await w.bot('GET', '/v1/calendar/calendars');
+    const bot = w.objects.get('acct-bot')!;
+    expect(await bot.receiveImip({ ics: google({ uid: 'g2' }), fromEmail: 'mallory@evil.example', to })).toMatchObject({ ok: false, code: 'not_organizer' });
+    // An email claiming a member's account on the organizer line is not that member: the parameter is dropped.
+    const forged = google({ uid: 'g3', organizer: ADDR('ann') }).replace(`ORGANIZER;CN=Scott:`, 'ORGANIZER;CN=Ann;X-FLOW-ACCOUNT=acct-ann:');
+    const r = await bot.receiveImip({ ics: forged, fromEmail: ADDR('ann'), to });
+    expect(r).toMatchObject({ ok: true, action: 'created' });
+    const ev = (await w.bot('GET', W)).j.events.find((e: { id: string }) => e.id.endsWith(':g3'));
+    expect(JSON.stringify(ev)).not.toContain('acct-ann');
+    expect(await bot.receiveImip({ ics: 'not a calendar', fromEmail: SCOTT, to })).toMatchObject({ ok: false, code: 'bad_request' });
+  });
+});
