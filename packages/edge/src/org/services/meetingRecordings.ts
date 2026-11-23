@@ -12,7 +12,7 @@ import { config } from '../config.js';
 import { ApiError } from '../lib/errors.js';
 import { meetingRow, requireRoomAccess, rtk, type MeetingRow } from './meetings.js';
 import { postHuddleSystemMessage } from './messages.js';
-import { writeAgentNotes } from './meetingAgents.js';
+import { publishMeetingEnded } from './meetingAgents.js';
 
 /** What Meet needs of the organization's Docs object (edge/src/docs/object.ts `saveMeetingFiles`). */
 export interface MeetingDocs {
@@ -228,6 +228,17 @@ async function freeFolder(base: string, sessionId: string): Promise<string> {
   return folder;
 }
 
+/** A session's folder: its recording's, or a new free one named for the day in `timeZone` (an agent's Notes of a session nobody recorded). */
+export async function sessionFolder(m: MeetingRow, sessionId: string, timeZone: string | null): Promise<string> {
+  const [earlier] = await db
+    .select({ folder: schema.meetingRecordings.folder })
+    .from(schema.meetingRecordings)
+    .where(and(eq(schema.meetingRecordings.meetingId, m.id), eq(schema.meetingRecordings.sessionId, sessionId)))
+    .orderBy(asc(schema.meetingRecordings.startedAt))
+    .limit(1);
+  return earlier?.folder ?? (await freeFolder(meetingFolder(m.title, folderDate(new Date(), timeZone)), sessionId));
+}
+
 /** DELETE /v1/meetings/:id/recording: anyone in the room who is a member stops it. Nothing running is not an error. */
 export async function stopRecording(ref: string, userId: string): Promise<{ ok: true }> {
   const m = await meetingRow(ref);
@@ -373,10 +384,15 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
     if (!saved.markdown) throw new Error('Docs saved no transcript');
     await db.update(schema.meetingRecordings).set({ transcriptUrl: saved.markdown.url, transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
     await postFileLine(m, row.startedBy, `The transcript of this meeting is in Docs › ${row.folder}`, saved.markdown.url);
-    // Phase 5: each agent sent to this session writes its Notes from it.
-    await writeAgentNotes(m, row, transcriptText, lines.some((l) => !!l.sentence?.trim()));
+    // Each agent sent to this session hears that it ended, with the transcript (meetingAgents.ts): its automation writes the Notes.
+    if (row.sessionId) {
+      const speakers = [...new Set(lines.filter((l) => l.sentence?.trim()).map((l) => (l.peerData?.displayName ?? l.peerData?.name ?? '').trim()).filter(Boolean))];
+      await publishMeetingEnded(m, row.sessionId, row.folder, { docId: saved.markdown.id, url: saved.markdown.url, hadSpeech: lines.some((l) => !!l.sentence?.trim()), speakers });
+    }
   } catch (err) {
     console.error('meeting transcript: could not save to Docs', { recordingId: row.id, err: (err as Error).message });
     await db.update(schema.meetingRecordings).set({ transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
+    // The agents still hear that the meeting ended, without a transcript.
+    if (row.sessionId) await publishMeetingEnded(m, row.sessionId, row.folder, null).catch((e: Error) => console.error('meet.ended not published', e.message));
   }
 }

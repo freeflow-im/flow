@@ -356,7 +356,8 @@ export class Events extends DurableObject<EventsEnv> {
     const [channels, agents, sponsored] = await Promise.all([
       org ? (org.privateChannelIdsOfAccounts(owners) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
       kinds && org ? (org.agentAccountIds() as Promise<string[]>) : Promise.resolve(undefined),
-      sponsors.length && org ? (org.personalAgentAccountsOf(sponsors) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
+      // A `consumerOwn` filter is the server's alone (no request can set it): its job goes to the agent, about its own events.
+      sponsors.length && org ? (org.sponsoredAgentAccountsOf(sponsors) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
     ]);
     for (const sub of subs) {
       const reader = await this.withShares({

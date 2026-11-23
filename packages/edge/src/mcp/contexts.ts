@@ -16,6 +16,7 @@ import { appDoorTools } from '../registry/userApps';
 import type { DocsPort, McpRequestCaller, SuiteDeps } from './suite.ts';
 import type { ChatToolContext } from '../chat/mcpTools.ts';
 import type { MeetToolContext } from '../meet/mcpTools.ts';
+import { eventSearchAs, type EventSearchOps } from '../events/search.ts';
 
 export interface McpContextEnv {
   DIRECTORY: DurableObjectNamespace<Directory>;
@@ -101,7 +102,16 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
   let events: SubscriptionOps | undefined;
   let wakes: WakeOps | undefined;
   let alerts: AlertOps | undefined;
+  let eventSearch: EventSearchOps | undefined;
   if (EVENTS && ORG) {
+    // search_events as the caller's account, with the person who asked a shared agent (events/search.ts).
+    eventSearch = {
+      search: async (input) => {
+        const w = await who();
+        if (!w?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
+        return eventSearchAs(EVENTS.get(EVENTS.idFromName(caller.orgId)), ORG.get(ORG.idFromName(caller.orgId)), { accountId: w.account.id, invokedBy: agent.invokedBy ?? null }).search(input);
+      },
+    };
     // Alerts as the caller's account (shared/alerts.ts): the Org object picks who gets one, from the account and the
     // person the agent says it works for (`invokedBy`, which the directory checked).
     let alertOps: Promise<AlertOps> | null = null;
@@ -128,7 +138,7 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
 
   const apps: Record<string, AppToolContext> = appToolContexts(env, who, caller.origin);
   const userAppTools = await userAppToolsOf(env, caller, who);
-  return { docs: docsPort(env, caller), mail, calendar, events, wakes, alerts, member, chat: chatOf(env, caller), meet: meetOf(env, caller), apps, userAppTools };
+  return { docs: docsPort(env, caller), mail, calendar, events, wakes, alerts, eventSearch, member, chat: chatOf(env, caller), meet: meetOf(env, caller), apps, userAppTools };
 }
 
 /**

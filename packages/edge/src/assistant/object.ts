@@ -11,7 +11,10 @@
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
 import { subscriptionsAs, wakesAs, type WakePlace } from '../events/subscriptions';
 import { alertsAs } from '../events/alerts';
-import type { AlertToolContext, EventToolContext, WakeToolContext } from '../events/eventTools';
+import type { AlertToolContext, EventSearchContext, EventToolContext, WakeToolContext } from '../events/eventTools';
+import { eventSearchAs } from '../events/search';
+import type { MeetToolContext } from '../meet/mcpTools';
+import { meetingWakeSubscription } from './meetingWake';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { mailApprovalPath, type AccountDTO, type AgentJobDTO, type HostedRuntimeDTO, type MailApprovalDTO, type UserDTO } from '@flow/shared';
@@ -452,13 +455,17 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const wakes = who?.agentAccountId ? this.wakesContext(who) : undefined;
         // show_alert (shared/alerts.ts): every turn; the Org object picks the person (the asker, the sponsor, the owner).
         const alerts = who ? this.alertsContext(who) : undefined;
+        // search_events (events/search.ts): every turn with an account, as that account (and who asked a shared agent).
+        const eventSearch = who ? this.eventSearchContext(who) : undefined;
+        // save_meeting_notes (meet/mcpTools.ts): a hosted agent's turns, as its caller (the Org object finds the agent).
+        const meet = who?.agentAccountId ? this.meetContext(who) : undefined;
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
         // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
         const appCaller = this.appCallerOf(who);
         const ORG = this.env.ORG;
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), ...(alerts ? { alerts } : {}), memory };
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), ...(alerts ? { alerts } : {}), ...(eventSearch ? { eventSearch } : {}), ...(meet ? { meet } : {}), memory };
       },
       // Every model call's tokens, to the organization's count for this agent (org/agentUsage.ts, Admin › Members › Usage).
       onUsage: (userId: string, usage, model) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage, model),
@@ -564,6 +571,25 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = c.account?.organizationId || c.organizationId;
     if (!EVENTS || !ORG || !org || !c.account) return undefined;
     return { alerts: alertsAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { accountId: c.account.id, organizationId: org, invokedBy: c.invokedBy ?? null, via: c.via ?? null }) };
+  }
+
+  /** search_events' context (events/search.ts): the event log as the turn's account, with the person who asked a shared agent. */
+  private eventSearchContext(who: Who): EventSearchContext | undefined {
+    const { EVENTS, ORG } = this.env;
+    const c = who.caller;
+    const org = c.account?.organizationId || c.organizationId;
+    if (!EVENTS || !ORG || !org || !c.account) return undefined;
+    return { eventSearch: eventSearchAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { accountId: c.account.id, invokedBy: c.invokedBy ?? null }) };
+  }
+
+  /** Meet's tools for a hosted agent's turn (meet/mcpTools.ts): the Org object, as the turn's caller and the agent it runs. */
+  private meetContext(who: Who): MeetToolContext | undefined {
+    const ORG = this.env.ORG;
+    const c = who.caller;
+    const org = c.account?.organizationId || c.organizationId;
+    if (!ORG || !org || !c.user) return undefined;
+    const userId = c.user.id;
+    return { meet: (tool, input) => ORG.get(ORG.idFromName(org)).mcpMeet({ userId, tool, input, origin: this.origin, via: c.via ?? null, invokedBy: c.invokedBy ?? null }) };
   }
 
   /** Calendar's tools: the account's Calendar object (or a shared calendar's owner's), as routes/calendar.ts reaches them. */
@@ -782,26 +808,37 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
+  private meetingWakeSync: Promise<unknown> = Promise.resolve();
+
   /**
-   * An agent's meeting Notes (Meet phase 5, org/services/meetingAgents.ts): one headless turn on the prompt (which quotes
-   * the meeting's transcript), in a conversation of its own per meeting session, and what it wrote is given back for the
-   * organization's object to save in Docs. A personal agent runs with its sponsor's access; a shared agent as itself,
-   * asked by whoever sent it.
+   * The agent's built-in "Meeting notes" automation (assistant/meetingWake.ts), made the first time it is sent to a meeting
+   * (org/services/meetingAgents.ts): owned by its sponsor (the agent itself when it has none), who sees it in their
+   * Automations list and may change or delete it. Once deleted it is not made again: the state remembers the deletion.
    */
-  async meetingNotes(p: { organizationId: string; runtime: HostedRuntimeDTO; key: string; prompt: string; askerUserId: string; askerAccountId: string | null }): Promise<string> {
-    const { runtime, organizationId } = p;
-    this.learnName(runtime.agentName);
-    await this.learnAgentAccount(runtime.agentAccountId, runtime.mode);
-    await this.useOrgModel(organizationId);
-    this.requireModel();
-    const conversation = `meeting:${p.key}`;
-    const shared = runtime.mode === 'shared' && p.askerAccountId ? { invokedBy: p.askerAccountId, asker: p.askerUserId } : {};
-    const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the agent in a meeting', shared);
-    const { text } = await this.runHeadless({
-      organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
-      first: { message: p.prompt }, ...(shared.invokedBy ? { stamp: { invokedBy: shared.invokedBy } } : {}),
-    });
-    return text;
+  async ensureMeetingWake(p: { organizationId: string; runtime: HostedRuntimeDTO }): Promise<'made' | 'there' | 'deleted' | 'off'> {
+    const run = this.meetingWakeSync.then(() => this.ensureMeetingWakeNow(p));
+    this.meetingWakeSync = run.catch(() => undefined);
+    return run;
+  }
+
+  private async ensureMeetingWakeNow(p: { organizationId: string; runtime: HostedRuntimeDTO }): Promise<'made' | 'there' | 'deleted' | 'off'> {
+    const ns = this.env.EVENTS;
+    const agent = p.runtime.agentAccountId;
+    if (!ns || !p.organizationId || !agent || p.runtime.role === 'admin') return 'off';
+    const events = ns.get(ns.idFromName(p.organizationId));
+    const key = `meeting_wake:${agent}`;
+    const id = this.state(key);
+    if (id === 'deleted') return 'deleted';
+    if (id) {
+      if (await events.getSubscription(id)) return 'there';
+      // Its owner deleted it from their Automations list: that is their answer, so it is not made again.
+      this.setState(key, 'deleted');
+      return 'deleted';
+    }
+    const sub = await events.createSubscription(meetingWakeSubscription({ organizationId: p.organizationId, agentAccountId: agent, sponsorAccountId: p.runtime.sponsorAccountId ?? agent }));
+    this.setState(key, sub.id);
+    console.log(`[assistant] meeting notes automation for ${agent}: subscription ${sub.id}`);
+    return 'made';
   }
 
   /**

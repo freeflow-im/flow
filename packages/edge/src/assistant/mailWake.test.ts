@@ -28,6 +28,7 @@ function harness() {
   const org = {
     privateChannelIdsOfAccounts: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, []])), agentAccountIds: async () => [ADA], pokeSubscription: async () => 0,
     personalAgentAccountsOf: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === ANN ? [ADA] : []])),
+    sponsoredAgentAccountsOf: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === ANN ? [ADA] : []])),
   };
   const env = { ORG: { idFromName: (n: string) => n, get: () => org }, JOBS: { send: async (body: JobMessage) => { sent.push(body); } } };
   const storage = { sql: sqlite(), transactionSync: <T>(fn: () => T) => fn(), getAlarm: async () => null, setAlarm: async () => undefined };
