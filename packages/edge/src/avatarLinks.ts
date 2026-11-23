@@ -37,3 +37,16 @@ export function publicPictureUrl(avatarUrl: string | null | undefined, p: { orig
   if (!key || !p.secret) return null;
   return `${origin}${PUBLIC_AVATAR_PATH}${key}?s=${signatureOf(p.secret, key)}`;
 }
+
+/**
+ * A picture's type from its first bytes, for a file stored without an image type (pictures from before the move to R2
+ * were kept as application/octet-stream): PNG, JPEG, GIF or WebP, else null.
+ */
+export function imageTypeOf(head: Uint8Array): string | null {
+  const at = (i: number, ...bytes: number[]) => bytes.every((b, j) => head[i + j] === b);
+  if (at(0, 0x89, 0x50, 0x4e, 0x47)) return 'image/png';
+  if (at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+  if (at(0, 0x47, 0x49, 0x46, 0x38)) return 'image/gif';
+  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return 'image/webp';
+  return null;
+}

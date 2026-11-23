@@ -1,6 +1,6 @@
 // Everything an organization owns goes to its object: the path names the organization, or an id the directory can look up.
 import { Hono, type Context } from 'hono';
-import { checkAvatarSignature, PUBLIC_AVATAR_PATH } from '../avatarLinks';
+import { checkAvatarSignature, imageTypeOf, PUBLIC_AVATAR_PATH } from '../avatarLinks';
 import { verifyRtkWebhook } from '../rtkWebhook';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import { AGENT_AVATAR_PRESETS, agentAvatarUrl, type AgentAvatarPreset } from '@flow/shared/assistant';
@@ -240,9 +240,13 @@ orgRoutes.get(`${PUBLIC_AVATAR_PATH}:key`, async (c) => {
   const key = c.req.param('key');
   if (!checkAvatarSignature(c.env.FLOW_DATA_KEY, key, c.req.query('s'))) throw notFound('avatar not found');
   const object = await c.env.BLOBS.get(`avatars/${key}`);
-  const type = object?.httpMetadata?.contentType ?? 'image/webp';
-  if (!object || !/^image\/(png|jpeg|gif|webp)$/.test(type)) throw notFound('avatar not found');
-  return new Response(object.body, { headers: { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+  if (!object) throw notFound('avatar not found');
+  const stored = object.httpMetadata?.contentType ?? '';
+  // An older picture is stored as application/octet-stream: its type comes from its first bytes. Nothing but a picture goes out.
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const type = /^image\/(png|jpeg|gif|webp)$/.test(stored) ? stored : imageTypeOf(bytes.subarray(0, 16));
+  if (!type) throw notFound('avatar not found');
+  return new Response(bytes, { headers: { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
 });
 
 /** The same request to each of a person's organizations, with the answers joined: lists concatenated, counts added. */
