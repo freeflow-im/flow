@@ -503,7 +503,11 @@ export const api = {
     request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
   /** The assistant's settings belong to the caller's account in the organization the bar selected (the Assistant object is
    * one per account), so both name it; with none named the Worker falls back to the caller's first organization. */
-  assistantSettings: () => request<{ settings: AssistantSettings }>('GET', `/api/settings/assistant${inFolder(undefined, true)}`),
+  assistantSettings: (agentId?: string | null) => {
+    // `agentId`: one of the person's other agents (the panel's picker); its model pin decides what it runs on.
+    const url = `/api/settings/assistant${inFolder(undefined, true)}`;
+    return request<{ settings: AssistantSettings }>('GET', agentId ? `${url}${url.includes('?') ? '&' : '?'}agent=${encodeURIComponent(agentId)}` : url);
+  },
   saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', `/api/settings/assistant${inFolder(undefined, true)}`, body),
   /** Store a copy of a picture on the web; resolves to its /api/images/... address. */
   keepWebImage: async (url: string) => (await request<{ url: string }>('POST', '/api/images/fetch', { url })).url,
