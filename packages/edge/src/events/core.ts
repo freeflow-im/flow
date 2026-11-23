@@ -46,6 +46,16 @@ export interface ReadQuery {
   self?: string;
   /** With `self`: the account an event's `about` must name; `self`'s own when absent (a wake subscription's agent). */
   about?: string;
+  /** Only events at or after this time (ms), and at or before `toTs` (search_events). */
+  fromTs?: number;
+  toTs?: number;
+  /**
+   * Only events these accounts took part in (search_events, task 32): their actor, the account that asked a shared agent
+   * for them (`invoked_by`), addressed to one of them alone, or about one of them.
+   */
+  involves?: string[];
+  /** `invoked_by` must be this account (a string), or empty (null); any when absent. */
+  invokedBy?: string | null;
 }
 
 /**
@@ -323,6 +333,19 @@ export class EventsCore {
     return row ? this.withSchedule(row) : null;
   }
 
+  /**
+   * A person's edit of an automation (Admin › Automations, task 32): its name, and what it does (a wake's prompt, a post's
+   * body). Its filter, consumer and delivery stay: changing those is making another one. Null when there is no such one.
+   */
+  updateSubscription(id: string, patch: { name?: string; prompt?: string }): SubscriptionDTO | null {
+    const sub = this.getSubscription(id);
+    if (!sub) return null;
+    const a = sub.action;
+    const action = a && patch.prompt !== undefined ? (a.kind === 'wake' ? { ...a, prompt: patch.prompt } : { ...a, body: patch.prompt }) : a;
+    this.sql.exec('UPDATE subscriptions SET name = ?, action = ? WHERE id = ?', patch.name ?? sub.name, action ? JSON.stringify(action) : null, id);
+    return this.getSubscription(id);
+  }
+
   /** The subscription, its schedule and its jobs. */
   deleteSubscription(id: string): boolean {
     return this.transact(() => {
@@ -476,6 +499,14 @@ export class EventsCore {
   triggerOf(jobId: string, agent: string): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null {
     const job = this.getJob(jobId);
     return job && job.agent === agent ? this.jobTrigger(job) : null;
+  }
+
+  /** The type of the event that woke the agent's job and whom it was done for (`invoked_by`), while the log still has it. */
+  triggerInvoker(jobId: string, agent: string): { type: string; invokedBy: string | null } | null {
+    const job = this.getJob(jobId);
+    if (!job || job.agent !== agent) return null;
+    const row = this.sql.exec('SELECT type, invoked_by FROM events WHERE id = ?', job.eventId).toArray()[0];
+    return row ? { type: row.type as string, invokedBy: (row.invoked_by as string | null) ?? null } : null;
   }
 
   /** The brief the agent's runtime runs for the job (wakeBrief), as its first `agent.job` carried it; null for another agent's job. */
@@ -747,6 +778,17 @@ function whereOf(q: ReadQuery, agentAccountIds: string[]): { filter: string; arg
     args.push(`account:${q.self}`, q.about ?? q.self);
   }
   if (q.text?.trim()) { where.push('instr(lower(data), lower(?)) > 0'); args.push(q.text.trim()); }
+  if (q.fromTs !== undefined) { where.push('ts >= ?'); args.push(Math.floor(q.fromTs)); }
+  if (q.toTs !== undefined) { where.push('ts <= ?'); args.push(Math.floor(q.toTs)); }
+  if (q.involves) {
+    const ids = JSON.stringify(q.involves);
+    where.push(`(actor IN (SELECT value FROM json_each(?)) OR invoked_by IN (SELECT value FROM json_each(?))
+      OR audience IN (SELECT 'account:' || value FROM json_each(?))
+      OR (about IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(about) WHERE value IN (SELECT value FROM json_each(?)))))`);
+    args.push(ids, ids, ids, ids);
+  }
+  if (q.invokedBy === null) where.push('invoked_by IS NULL');
+  else if (typeof q.invokedBy === 'string') { where.push('invoked_by = ?'); args.push(q.invokedBy); }
   if (q.actorKind === 'agent' || q.actorKind === 'person') {
     where.push(q.actorKind === 'agent'
       ? 'actor IN (SELECT value FROM json_each(?))'

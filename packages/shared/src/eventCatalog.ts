@@ -50,6 +50,8 @@ export const EVENT_LABELS: Record<string, string> = {
   'calendar.invited': 'Invitation received',
   'calendar.booked': 'Booking made',
   'contacts.changed': 'Contacts changed',
+  'meet.agent_joined': 'Agent sent to a meeting',
+  'meet.ended': 'Meeting ended (for an agent that attended)',
   'agent.job.finished': 'Agent job finished',
   'alert.created': 'Alert shown',
   'alert.closed': 'Alert closed',

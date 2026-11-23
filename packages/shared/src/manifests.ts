@@ -194,6 +194,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
       'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs', 'schedule_wake', 'list_wakes', 'cancel_wake', 'show_alert',
+      'search_events', 'read_meeting_transcript', 'save_meeting_notes',
     ],
     scopes: [
       {
@@ -261,7 +262,8 @@ export const APP_MANIFESTS: AppManifest[] = [
       // A meeting's link opens for anyone (phase 3): a member signs in to join, a guest types a name (ruling R2).
       { path: '/meet/*', html: 'meet.html', passFiles: true, headers: PUBLIC },
     ],
-    events: [],
+    // What agents sent to meetings did (Taskboard task 32, org/services/meetingAgents.ts): addressed to the agent.
+    events: ['meet.agent_joined', 'meet.ended'],
   },
   {
     // The assistant (platform.md §5.5): one object per account holding its chats, settings and usage, which runs the model

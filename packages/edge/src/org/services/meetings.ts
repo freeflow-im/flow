@@ -28,6 +28,7 @@ import { toChannelDTO } from './channels.js';
 import { postMeetingStartedLine } from './messages.js';
 import { addMeetingGuestVisitor, endMeetingVisits } from './visitors.js';
 import { handleRecordingUpdate, handleTranscript, type RecordingWebhook, type TranscriptWebhook } from './meetingRecordings.js';
+import { meetingEndedForAgents } from './meetingAgents.js';
 
 const HOST_PRESET = 'group_call_host';
 const MEMBER_PRESET = 'group_call_participant';
@@ -516,6 +517,8 @@ export async function handleRtkWebhook(event: {
   // Recording (phase 4): for every room, huddle or not. The copy to Docs is the alarm's (meetingRecordings.ts).
   if (event.event === 'recording.statusUpdate') return void (await handleRecordingUpdate(m, event));
   if (event.event === 'meeting.transcript') return void (await handleTranscript(m, event));
+  // Agents of a session nobody recorded are told now that it ended (task 32); a recorded one's, once its transcript is in.
+  if (event.event === 'meeting.ended') await meetingEndedForAgents(m, event.meeting?.sessionId).catch((err: Error) => console.error('meeting ended: agents not told', err.message));
   if (!m.channelId) {
     if (!m.chatChannelId) return;
     const [chat] = await db.select().from(schema.channels).where(eq(schema.channels.id, m.chatChannelId)).limit(1);

@@ -64,7 +64,8 @@ import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 import { MEETING_FILES_DUE_SQL, saveDueMeetingFiles, setMeetingDocs } from './services/meetingRecordings';
 import type { Docs } from '../docs/object';
 import type { MeetingAgent } from '../meet/agent';
-import { agentLeft, setMeetingAgentHooks } from './services/meetingAgents';
+import { agentLeft, agentMeetingTranscript, saveAgentMeetingNotes, setMeetingAgentHooks } from './services/meetingAgents';
+import { meetingNotesSubscription } from '../meet/notesAutomation';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
 /** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
@@ -96,6 +97,8 @@ const AGENTS_RETIRED_KEY = 'agents_retired_v1';
 const MEMBERS_KEY = 'members_v2';
 /** The admin agent's principal id, once this organization has one (agents.md §1.4). */
 const ADMIN_AGENT_KEY = 'admin_agent_v1';
+/** `<prefix><agent account>`: the agent's Meeting notes automation was made (its id), so it is never made again (task 32). */
+const MEETING_NOTES_KEY = 'meet_notes_automation:';
 /** The workspace's team agent, Omni (docs/specs/onboarding.md §2): the principal id of the shared agent that joins every public channel. */
 const TEAM_AGENT_KEY = 'team_agent_v1';
 /** A person's place in setup (docs/specs/onboarding.md §5), per user: `setup:<userId>`. */
@@ -174,8 +177,11 @@ export class Org extends DurableObject<OrgEnv> {
     setMeetingAgentHooks(agents && env.ASSISTANT ? {
       join: (p) => agents.get(agents.idFromName(p.meetingAgentId)).start(p),
       recall: (id) => agents.get(agents.idFromName(id)).stop(),
-      writeNotes: (p) => this.meetingNotesTurn(p),
       adminAgentId: async () => (await this.ctx.storage.get<string>(ADMIN_AGENT_KEY)) ?? null,
+      publish: async (e) => {
+        if (env.EVENTS) await env.EVENTS.get(env.EVENTS.idFromName(e.organizationId)).publish(e);
+      },
+      ensureNotesAutomation: (p) => this.ensureNotesAutomation(p),
     } : null);
     this.db = openDb(ctx.storage);
     const sql = ctx.storage.sql;
@@ -2274,17 +2280,50 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
-   * One headless turn of a hosted agent for its meeting Notes (services/meetingAgents.ts): the agent's runtime from the
-   * directory, then its Assistant object's meetingNotes, which gives back what the agent wrote.
+   * An agent's Meeting notes automation (meet/notesAutomation.ts, task 32), made the first time it is sent to a meeting.
+   * The key stays after someone deletes the automation, so it is not made again: deleting it is how it is turned off.
    */
-  private async meetingNotesTurn(p: { organizationId: string; agentAccountId: string; askerUserId: string; askerAccountId: string | null; key: string; prompt: string }): Promise<string> {
-    if (!this.env.ASSISTANT) throw new Error('no Assistant binding');
-    const answer = await this.directory().call('hostedRuntimeOf' as never, [p.agentAccountId] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
-    if (!answer.ok || !answer.value) throw new Error('the agent is not a hosted agent');
-    const runtime = answer.value;
-    return this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(runtime.runtimeKey)).meetingNotes({
-      organizationId: p.organizationId, runtime, key: p.key, prompt: p.prompt, askerUserId: p.askerUserId, askerAccountId: p.askerAccountId,
-    });
+  private async ensureNotesAutomation(p: { agentAccountId: string; ownerAccountId: string }): Promise<void> {
+    const EVENTS = this.env.EVENTS;
+    const org = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get()?.id;
+    if (!EVENTS || !org) return;
+    const key = `${MEETING_NOTES_KEY}${p.agentAccountId}`;
+    if (await this.ctx.storage.get(key)) return;
+    await this.ctx.storage.put(key, 'making');
+    try {
+      const sub = await EVENTS.get(EVENTS.idFromName(org)).createSubscription(meetingNotesSubscription({ organizationId: org, ...p }));
+      await this.ctx.storage.put(key, sub.id);
+    } catch (err) {
+      await this.ctx.storage.delete(key);
+      throw err;
+    }
+  }
+
+  /** The agent's user id in this organization, by its account. */
+  private agentUserOf(agentAccountId: string): string | null {
+    return (this.ctx.storage.sql.exec('SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent', agentAccountId).toArray()[0]?.user_id as string | undefined) ?? null;
+  }
+
+  /** An agent's answer for a meeting tool: its value, or the refusal the agent is shown (ApiError's code and message). */
+  private async meetingAnswer<T>(agentAccountId: string, fn: (agentUserId: string) => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; code: string; message: string }> {
+    const agentUserId = this.agentUserOf(agentAccountId);
+    if (!agentUserId) return { ok: false, code: 'not_an_agent', message: 'Only an agent that attended a meeting can do that.' };
+    try {
+      return { ok: true, value: await this.scoped(() => fn(agentUserId)) };
+    } catch (err) {
+      if (err instanceof ApiError) return { ok: false, code: err.code, message: err.message };
+      throw err;
+    }
+  }
+
+  /** read_meeting_transcript (events/eventTools.ts): a session's transcript, for an agent that was in it. */
+  async agentMeetingTranscript(agentAccountId: string, meetingId: string, sessionId: string) {
+    return this.meetingAnswer(agentAccountId, (agent) => agentMeetingTranscript(agent, meetingId, sessionId));
+  }
+
+  /** save_meeting_notes (events/eventTools.ts): an agent's notes of a session it was in, in its sender's My files. */
+  async saveAgentMeetingNotes(agentAccountId: string, meetingId: string, sessionId: string, markdown: string) {
+    return this.meetingAnswer(agentAccountId, (agent) => saveAgentMeetingNotes(agent, meetingId, sessionId, markdown));
   }
 
   /** Visitors not seen for 30 days lose access (V8), once a day while there are visitors. */

@@ -343,16 +343,17 @@ export class Docs extends DurableObject<DocsEnv> {
   async saveMeetingFiles(
     organizationId: string,
     owner: { userId: string; email: string },
-    input: { folder: string; video?: { url: string; filename: string }; markdown?: { title: string; text: string } },
+    input: { folder: string; video?: { url: string; filename: string }; markdown?: { title: string; text: string }; private?: boolean },
   ): Promise<{ folderUrl: string; video?: SavedMeetingFile; markdown?: SavedMeetingFile }> {
     return this.inOrganization(organizationId, async () => {
       const stores = this.stores;
       if (!stores?.files || !stores.folders || !stores.sheets) throw new Error('Docs stores are not ready');
       this.lazy!.mcp.mirrorUser(owner.userId, owner.email);
-      const scope = { ownerId: owner.userId, workspaceId: organizationId, private: false };
+      // Organization files, or (`private`) the owner's My files: an agent's meeting notes go to whoever sent it (task 32).
+      const scope = { ownerId: owner.userId, workspaceId: organizationId, private: !!input.private };
       stores.folders.create(scope, input.folder);
       const out: { folderUrl: string; video?: SavedMeetingFile; markdown?: SavedMeetingFile } = {
-        folderUrl: `/docs/?folder=${encodeURIComponent(input.folder)}&org=${encodeURIComponent(organizationId)}`,
+        folderUrl: input.private ? `/docs/?folder=${encodeURIComponent(input.folder)}` : `/docs/?folder=${encodeURIComponent(input.folder)}&org=${encodeURIComponent(organizationId)}`,
       };
       if (input.video) {
         const res = await fetch(input.video.url);

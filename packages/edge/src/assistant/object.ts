@@ -11,6 +11,8 @@
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
 import { subscriptionsAs, wakesAs, type WakePlace } from '../events/subscriptions';
 import { alertsAs } from '../events/alerts';
+import { historyAs, type HistoryOps } from '../events/history';
+import type { MeetingNotesOps } from '../events/eventTools';
 import type { AlertToolContext, EventToolContext, WakeToolContext } from '../events/eventTools';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
@@ -452,13 +454,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const wakes = who?.agentAccountId ? this.wakesContext(who) : undefined;
         // show_alert (shared/alerts.ts): every turn; the Org object picks the person (the asker, the sponsor, the owner).
         const alerts = who ? this.alertsContext(who) : undefined;
+        // search_events and the meeting tools (events/history.ts, task 32): every hosted agent's turn, as that agent.
+        const history = who?.agentAccountId ? this.historyContext(who) : undefined;
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
         // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
         const appCaller = this.appCallerOf(who);
         const ORG = this.env.ORG;
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), ...(alerts ? { alerts } : {}), memory };
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), ...(alerts ? { alerts } : {}), ...(history ?? {}), memory };
       },
       // Every model call's tokens, to the organization's count for this agent (org/agentUsage.ts, Admin › Members › Usage).
       onUsage: (userId: string, usage, model) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage, model),
@@ -555,6 +559,32 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = who.caller.account?.organizationId || who.caller.organizationId;
     if (!EVENTS || !ORG || !org || !who.agentAccountId) return undefined;
     return { wakes: wakesAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { agentAccountId: who.agentAccountId, organizationId: org, place: () => who.place ?? null }) };
+  }
+
+  /**
+   * search_events' and the meeting tools' context (events/history.ts, org/services/meetingAgents.ts): the turn's agent, and
+   * the person who started the turn (a personal agent's sponsor, who it acts as; the member who asked a shared agent).
+   */
+  private historyContext(who: Who): { history: HistoryOps; meetings: MeetingNotesOps } | undefined {
+    const { EVENTS, ORG } = this.env;
+    const c = who.caller;
+    const org = c.account?.organizationId || c.organizationId;
+    const agent = who.agentAccountId;
+    if (!EVENTS || !ORG || !org || !agent) return undefined;
+    const person = c.via ? c.account?.id ?? null : c.invokedBy ?? null;
+    const stub = ORG.get(ORG.idFromName(org));
+    const answer = async <T>(p: Promise<{ ok: true; value: T } | { ok: false; code: string; message: string }>): Promise<T> => {
+      const a = await p;
+      if (!a.ok) throw Object.assign(new Error(a.message), { code: a.code });
+      return a.value;
+    };
+    return {
+      history: historyAs(EVENTS.get(EVENTS.idFromName(org)), stub as never, { selfAccountId: agent, personAccountId: person }),
+      meetings: {
+        transcript: (meetingId, sessionId) => answer(stub.agentMeetingTranscript(agent, meetingId, sessionId) as never),
+        saveNotes: (meetingId, sessionId, markdown) => answer(stub.saveAgentMeetingNotes(agent, meetingId, sessionId, markdown) as never),
+      },
+    };
   }
 
   /** The alert tool's context (events/eventTools.ts ALERT_TOOLS): alerts as the turn's account, for the person it works for. */
@@ -685,7 +715,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
       const sub = events ? await Promise.resolve().then(() => events.getSubscription(job.subscriptionId)).catch(() => null) : null;
       const replyByMail = sub?.action?.kind === 'wake' && sub.action.reply === 'mail' && runtime.mode === 'personal';
       let conversation = `auto:${job.subscriptionId}`;
-      const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime');
+      // A shared agent's meet.ended job is for whoever sent it to the meeting (task 32): its notes, memory and alerts are theirs.
+      const forSender = runtime.mode === 'shared' ? await this.meetingSenderOf(events, job) : null;
+      const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime', forSender ?? {});
       // A wake set in this turn answers where this job does (agent-self-wake.md).
       if (job.channelId) who.place = { channelId: job.channelId, threadRootId: job.threadRootId ?? null };
       // The brief (events/core.ts wakeBrief) says an automation woke the agent and for which event; a mail reply job's
@@ -705,7 +737,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       if (!replyByMail) withDocsContext(this.context, () => this.service().agent.reset(conversation));
       const { text } = await this.runHeadless({
         organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
-        first: { message: prompt }, stamp: { depth: job.depth + 1, causedBy: job.id },
+        first: { message: prompt }, stamp: { depth: job.depth + 1, causedBy: job.id, ...(forSender ? { invokedBy: forSender.invokedBy } : {}) },
       });
       if (mail && text && mailbox) {
         const sent = await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) });
@@ -726,6 +758,18 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
     this.runningJobs.delete(job.id);
     await step('done', { ok, note });
+  }
+
+  /**
+   * The person a shared agent's job works for when a `meet.ended` woke it (task 32): who sent it to the meeting, as the
+   * event names them (`invokedBy`, which the Org object published). Null for any other job.
+   */
+  private async meetingSenderOf(events: DurableObjectStub<import('../events/object').Events> | undefined, job: AgentJobDTO): Promise<{ invokedBy: string; asker: string } | null> {
+    if (!events) return null;
+    const t = (await Promise.resolve().then(() => events.jobTriggerInvoker(job.id, job.agent)).catch(() => null)) as { type: string; invokedBy: string | null } | null;
+    if (t?.type !== 'meet.ended' || !t.invokedBy) return null;
+    const sender = await this.directory<AccountDTO | null>('accountById', t.invokedBy).catch(() => null);
+    return sender?.principalId ? { invokedBy: t.invokedBy, asker: sender.principalId } : null;
   }
 
   /**
@@ -780,28 +824,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
     } finally {
       this.runningJobs.delete(jobKey);
     }
-  }
-
-  /**
-   * An agent's meeting Notes (Meet phase 5, org/services/meetingAgents.ts): one headless turn on the prompt (which quotes
-   * the meeting's transcript), in a conversation of its own per meeting session, and what it wrote is given back for the
-   * organization's object to save in Docs. A personal agent runs with its sponsor's access; a shared agent as itself,
-   * asked by whoever sent it.
-   */
-  async meetingNotes(p: { organizationId: string; runtime: HostedRuntimeDTO; key: string; prompt: string; askerUserId: string; askerAccountId: string | null }): Promise<string> {
-    const { runtime, organizationId } = p;
-    this.learnName(runtime.agentName);
-    await this.learnAgentAccount(runtime.agentAccountId, runtime.mode);
-    await this.useOrgModel(organizationId);
-    this.requireModel();
-    const conversation = `meeting:${p.key}`;
-    const shared = runtime.mode === 'shared' && p.askerAccountId ? { invokedBy: p.askerAccountId, asker: p.askerUserId } : {};
-    const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the agent in a meeting', shared);
-    const { text } = await this.runHeadless({
-      organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
-      first: { message: p.prompt }, ...(shared.invokedBy ? { stamp: { invokedBy: shared.invokedBy } } : {}),
-    });
-    return text;
   }
 
   /**

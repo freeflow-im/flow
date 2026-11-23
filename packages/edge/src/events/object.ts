@@ -88,6 +88,18 @@ export class Events extends DurableObject<EventsEnv> {
   }
 
   /**
+   * search_events (history.ts): several reads, each newest first as its own reader, merged newest first, at most `limit`.
+   * Each part is one side of what an agent may look back on (its own events, its person's).
+   */
+  async search(parts: { query: ReadQuery; reader: Reader }[], limit: number): Promise<PlatformEvent[]> {
+    const seen = new Map<number, PlatformEvent>();
+    for (const p of parts) {
+      for (const e of (await this.read({ ...p.query, before: 0, limit }, p.reader)).events) seen.set(e.seq, e);
+    }
+    return [...seen.values()].sort((a, b) => b.seq - a.seq).slice(0, limit);
+  }
+
+  /**
    * The reader with the references shared with it (the Org object's share index, platform.md §4.5), asked once per read
    * and only when an event after `since` has a `ref:` audience, so a revoked grant stops delivery on the next read. Every
    * read goes through here: the one-shot route, a subscription's (and its long-poll), a socket's backlog, and an action's.
@@ -164,6 +176,10 @@ export class Events extends DurableObject<EventsEnv> {
     return this.core.getSubscription(id);
   }
 
+  updateSubscription(id: string, patch: { name?: string; prompt?: string }): SubscriptionDTO | null {
+    return this.core.updateSubscription(id, patch);
+  }
+
   deleteSubscription(id: string): boolean {
     this.wake(id);
     return this.core.deleteSubscription(id);
@@ -207,6 +223,11 @@ export class Events extends DurableObject<EventsEnv> {
   /** The event that woke the agent's job: what a hosted runtime answers (a `reply: 'mail'` wake answers its mail). */
   jobTrigger(id: string, agent: string): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null {
     return this.core.triggerOf(id, agent);
+  }
+
+  /** The type of the event that woke the job and whom it was done for (a shared agent's meet.ended job: its sender). */
+  jobTriggerInvoker(id: string, agent: string): { type: string; invokedBy: string | null } | null {
+    return this.core.triggerInvoker(id, agent);
   }
 
   /** What the agent's runtime runs for the job: the automation's prompt with the event that fired it (core.wakeBrief). */
@@ -358,10 +379,20 @@ export class Events extends DurableObject<EventsEnv> {
       kinds && org ? (org.agentAccountIds() as Promise<string[]>) : Promise.resolve(undefined),
       sponsors.length && org ? (org.personalAgentAccountsOf(sponsors) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
     ]);
+    const shared = new Map<string, Promise<boolean>>();
+    const sharedConsumer = (sub: SubscriptionDTO): Promise<boolean> => {
+      if (sub.delivery !== 'wake' || !org) return Promise.resolve(false);
+      if (!shared.has(sub.consumer)) {
+        shared.set(sub.consumer, Promise.resolve().then(() => org.agentSponsorOf(sub.consumer)).then((a) => !!a && !(a as { personal: boolean }).personal).catch(() => false));
+      }
+      return shared.get(sub.consumer)!;
+    };
     for (const sub of subs) {
       const reader = await this.withShares({
         accountId: sub.owner, channelIds: channels[sub.owner] ?? [], ...(agents ? { agentAccountIds: agents } : {}),
-        ...(sub.filter.consumerOwn ? { sponsoredAgentIds: sponsored[sub.owner] ?? [] } : {}),
+        // A personal agent's own events are its sponsor's to read; a shared agent's own events wake its own automation too
+        // (its Meeting notes, task 32): the job is the agent's, and who could make such a wake was checked when it was made.
+        ...(sub.filter.consumerOwn ? { sponsoredAgentIds: [...(sponsored[sub.owner] ?? []), ...(await sharedConsumer(sub) ? [sub.consumer] : [])] } : {}),
       }, after);
       const events = this.core.matchingEvents(sub, after, through, reader);
       for (const e of events) {

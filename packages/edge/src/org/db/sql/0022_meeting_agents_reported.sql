@@ -1,0 +1,1 @@
+ALTER TABLE `meeting_agents` ADD `reported_at` integer;

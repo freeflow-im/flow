@@ -12,14 +12,14 @@ import { config } from '../config.js';
 import { ApiError } from '../lib/errors.js';
 import { meetingRow, requireRoomAccess, rtk, type MeetingRow } from './meetings.js';
 import { postHuddleSystemMessage } from './messages.js';
-import { writeAgentNotes } from './meetingAgents.js';
+import { reportMeetingEnded } from './meetingAgents.js';
 
 /** What Meet needs of the organization's Docs object (edge/src/docs/object.ts `saveMeetingFiles`). */
 export interface MeetingDocs {
   saveMeetingFiles(
     organizationId: string,
     owner: { userId: string; email: string },
-    input: { folder: string; video?: { url: string; filename: string }; markdown?: { title: string; text: string } },
+    input: { folder: string; video?: { url: string; filename: string }; markdown?: { title: string; text: string }; private?: boolean },
   ): Promise<{ folderUrl: string; video?: { id: string; url: string }; markdown?: { id: string; url: string } }>;
 }
 
@@ -155,7 +155,7 @@ export function transcriptMarkdown(title: string, date: string, lines: Transcrip
   return `# Transcript · ${title}\n\n${date}\n\n${body || '_Nothing was said._'}\n`;
 }
 
-async function personOf(userId: string): Promise<{ email: string; displayName: string; timezone: string } | null> {
+export async function personOf(userId: string): Promise<{ email: string; displayName: string; timezone: string } | null> {
   const [u] = await db
     .select({ email: schema.users.email, displayName: schema.users.displayName, timezone: schema.users.timezone })
     .from(schema.users)
@@ -357,13 +357,7 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
   try {
     const owner = await personOf(row.startedBy);
     if (!owner || !docsOf) throw new Error('no owner or no Docs');
-    // The JSON shape when RTK gives it (the webhook's address is the CSV); else the webhook's file.
-    const asJson = row.sessionId
-      ? await rtk<{ transcript_download_url?: string }>('GET', `/sessions/${row.sessionId}/transcript?format=JSON`).catch(() => null)
-      : null;
-    const res = await fetch(asJson?.transcript_download_url ?? downloadUrl);
-    if (!res.ok) throw new Error(`transcript download failed: ${res.status}`);
-    const lines = parseTranscript(await res.text());
+    const lines = await transcriptLines(row.sessionId, downloadUrl);
     const date = folderDate(row.startedAt, owner.timezone);
     const transcriptText = transcriptMarkdown(m.title, date, lines);
     const saved = await docsOf(m.workspaceId).saveMeetingFiles(m.workspaceId, { userId: row.startedBy, email: owner.email }, {
@@ -373,10 +367,27 @@ async function saveTranscript(m: MeetingRow, row: RecordingRow, downloadUrl: str
     if (!saved.markdown) throw new Error('Docs saved no transcript');
     await db.update(schema.meetingRecordings).set({ transcriptUrl: saved.markdown.url, transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
     await postFileLine(m, row.startedBy, `The transcript of this meeting is in Docs › ${row.folder}`, saved.markdown.url);
-    // Phase 5: each agent sent to this session writes its Notes from it.
-    await writeAgentNotes(m, row, transcriptText, lines.some((l) => !!l.sentence?.trim()));
+    // The agents that were in this session are told it ended (task 32): their Meeting notes automation takes it from there.
+    const spoken = lines.some((l) => !!l.sentence?.trim());
+    await reportMeetingEnded(m, row.sessionId, { folder: row.folder, transcriptUrl: saved.markdown.url, transcript: spoken ? 'saved' : 'silent' });
   } catch (err) {
     console.error('meeting transcript: could not save to Docs', { recordingId: row.id, err: (err as Error).message });
     await db.update(schema.meetingRecordings).set({ transcriptDownloadUrl: null }).where(eq(schema.meetingRecordings.id, row.id));
+    await reportMeetingEnded(m, row.sessionId, { folder: row.folder, transcript: 'failed' }).catch((e: Error) => console.error('meeting ended: not reported', e.message));
   }
+}
+
+/**
+ * A session's transcript lines from RTK: the JSON shape when RTK gives it (the webhook's address is the CSV), else the file
+ * at `fallbackUrl`. RTK keeps them 7 days. Throws when neither can be read.
+ */
+export async function transcriptLines(sessionId: string | null, fallbackUrl?: string | null): Promise<TranscriptLine[]> {
+  const asJson = sessionId
+    ? await rtk<{ transcript_download_url?: string }>('GET', `/sessions/${sessionId}/transcript?format=JSON`).catch(() => null)
+    : null;
+  const url = asJson?.transcript_download_url ?? fallbackUrl;
+  if (!url) throw new Error('no transcript to download');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`transcript download failed: ${res.status}`);
+  return parseTranscript(await res.text());
 }

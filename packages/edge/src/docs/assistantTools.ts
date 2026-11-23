@@ -14,7 +14,8 @@ import { ASSISTANT_CALENDAR_TOOLS, assistantCalendarSchemas, type CalendarToolCo
 import { register, runnerOf, toolsFor } from '../registry/index.ts';
 import type { DocsToolContext } from '../assistant/docsTools.ts';
 // The event tools register themselves (a person's assistant makes automations with them, onboarding.md §4).
-import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS, WAKE_TOOLS, type AlertToolContext, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
+import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS, HISTORY_TOOLS, WAKE_TOOLS, type AlertToolContext, type EventToolContext, type MeetingNotesOps, type WakeToolContext } from '../events/eventTools.ts';
+import type { HistoryOps } from '../events/history.ts';
 import type { AppToolContext } from '../apps.ts';
 import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool } from '../assistant/browserTools.ts';
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
@@ -36,6 +37,10 @@ declare module '@flow/docs/server/agent/tools.ts' {
     wakes?: WakeToolContext;
     /** show_alert (events/eventTools.ts ALERT_TOOLS), in every turn with an account: an alert for the person the turn is for. */
     alerts?: AlertToolContext;
+    /** search_events (events/history.ts), in every hosted agent's turn: its own events and its person's; absent otherwise. */
+    history?: HistoryOps;
+    /** read_meeting_transcript and save_meeting_notes (org/services/meetingAgents.ts), in every hosted agent's turn. */
+    meetings?: MeetingNotesOps;
     /** The organization's Docs object over HTTP, as the person (the Assistant object): Docs' tools then run there, not on `sheets`. */
     docs?: DocsToolContext;
     /** The objects of the apps added by manifest, by name (apps.ts), for their tools. */
@@ -66,6 +71,7 @@ export const SUITE_GUIDANCE: readonly string[] = [
   "- A file you make or save (create_doc, create_sheet, create_deck, import_file, save_mail_attachment_to_docs) comes back with its url. In Mail or Calendar, give the user that link exactly as returned; never write a Docs address of your own, and do not call open_doc, open_sheet or open_deck there.",
   "- In FreeFlow Chat the <app_context> says so: the user asked you there, and your answer posts where they asked. There you have the Chat tools: list_channels and read_messages for the channels the user is in, search_messages to find messages by their words in those and in every public channel, send_message to post in one of them (it posts at once, as you), and leave_channel. You reach only channels the user is in, never their direct messages with others. You have the Chat tools in every turn no page started too (an automation's, an email's).",
   "- Automations: when the user asks for something to happen on its own (at a time, or when an email, a chat message or a calendar event comes in), make it with create_subscription, as the user: a schedule {every, timezone} for a time (the user's time zone), else a filter on the event types that match, with delivery 'wake', the agent to do it as consumer (your own account id for yourself) and action {kind:'wake', prompt}; a condition no filter can say goes at the start of the prompt. Then say in a sentence or two when it runs and what it does. list_subscriptions lists theirs, list_jobs one's runs. Only in the user's own conversations with you.",
+  "- Each of your conversations is separate: what you did in another one (a meeting you were sent to, a message you posted, an automation that woke you) is not in this one. When asked what you did, attended or said, or what happened earlier, look it up with search_events (yours, and the person's you work for) and in your memory before you answer; never say you do not remember without looking.",
   MEMORY_GUIDANCE,
   BROWSER_GUIDANCE,
 ];
@@ -98,6 +104,8 @@ export const SUITE_SCHEMAS: Record<string, z.ZodObject> = {
   ...Object.fromEntries(WAKE_TOOLS.map((t) => [t.name, z.object(t.shape).describe(t.description)])),
   // An alert in the suite bar for the person the turn is for (shared/alerts.ts).
   ...Object.fromEntries(ALERT_TOOLS.map((t) => [t.name, z.object(t.shape).describe(t.description)])),
+  // An agent's look back on its own events and its person's, and its meeting tools (events/history.ts, task 32).
+  ...Object.fromEntries(HISTORY_TOOLS.map((t) => [t.name, z.object(t.shape).describe(t.description)])),
   // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
   open_calendar_event: z
     .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })

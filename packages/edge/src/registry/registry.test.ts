@@ -19,11 +19,11 @@ import { TOOL_DEFS } from '@flow/docs/server/agent/tools.ts';
 import { CLIENT_TOOLS } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_MAIL_TOOLS, MAIL_TOOLS } from '../imap/mailTools.ts';
 import { ASSISTANT_CALENDAR_TOOLS, CALENDAR_TOOLS } from '../calendar/calendarTools.ts';
-import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS as EVENT_TOOLS_ONLY, WAKE_TOOLS } from '../events/eventTools.ts';
+import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS as EVENT_TOOLS_ONLY, HISTORY_TOOLS, WAKE_TOOLS } from '../events/eventTools.ts';
 
 // The event app's tools: the subscriptions' and an agent's wakes for itself (both at both doors where registered).
 const EVENT_TOOLS = [...EVENT_TOOLS_ONLY, ...WAKE_TOOLS, ...ALERT_TOOLS];
-const ASSISTANT_EVENTS: ReadonlySet<string> = new Set([...ASSISTANT_EVENT_TOOLS, ...WAKE_TOOLS.map((t) => t.name), ...ALERT_TOOLS.map((t) => t.name)]);
+const ASSISTANT_EVENTS: ReadonlySet<string> = new Set([...ASSISTANT_EVENT_TOOLS, ...WAKE_TOOLS.map((t) => t.name), ...ALERT_TOOLS.map((t) => t.name), ...HISTORY_TOOLS.map((t) => t.name)]);
 import { SCOPE_GROUPS } from '../directory/mcpOAuth.ts';
 import { toolLabel } from '@flow/docs/client/src/agent/describe.ts';
 import { BUILT_IN_TOOLS } from '../../../agent-bridge/src/mcp-server.ts';

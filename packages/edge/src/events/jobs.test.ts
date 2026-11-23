@@ -7,6 +7,8 @@ import { MAX_EVENT_DEPTH, type AgentJobEventData } from '@flow/shared';
 import { EventsCore, JOB_LEASE_MS, renderTemplate, type PublishInput } from './core';
 import { Events, type JobMessage } from './object';
 import { handleJobBatch } from './queue';
+import { MEETING_NOTES_PROMPT, meetingNotesSubscription } from '../meet/notesAutomation';
+import { subscriptionsAs } from './subscriptions';
 
 function sqlite() {
   const db = new DatabaseSync(':memory:');
@@ -35,6 +37,8 @@ function harness() {
   const org = {
     privateChannelIdsOfAccounts: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, []])),
     agentAccountIds: async () => [BOT],
+    personalAgentAccountsOf: async () => ({}),
+    agentSponsorOf: async (id: string) => (id === BOT ? { userId: 'u-bot', sponsorUserId: null, personal: false } : null),
     postAutomation: async (p: unknown) => { posts.push(p); return 'm1'; },
     automationNotice: async (p: unknown) => { notices.push(p); },
     pokeSubscription: async () => 0,
@@ -107,6 +111,34 @@ describe('wake subscriptions', () => {
     await h.o.publish(ev('chat.message.created', { channelId: 'secret', audience: 'channel:secret' }));
     await h.o.settled();
     expect(h.o.listJobs(sub.id)).toHaveLength(0);
+  });
+});
+
+describe('the Meeting notes automation (task 32)', () => {
+  it('wakes the agent on its own meet.ended, a shared agent too, and the job knows whom it is for', async () => {
+    const h = harness();
+    const sub = await h.o.createSubscription(meetingNotesSubscription({ organizationId: ORG, agentAccountId: BOT, ownerAccountId: BOB }));
+    await h.o.publish(ev('meet.ended', { actor: null, audience: `account:${BOT}`, invokedBy: BOB, about: [BOT, BOB], channelId: undefined, data: { title: 'Weekly planning' } }));
+    await h.o.publish(ev('meet.ended', { actor: null, audience: 'account:acct-other-agent', invokedBy: BOB, about: ['acct-other-agent', BOB], channelId: undefined }));
+    await h.o.settled();
+    const jobs = h.o.listJobs(sub.id);
+    expect(jobs).toHaveLength(1);
+    expect(h.o.jobBrief(jobs[0]!.id, BOT)).toContain(MEETING_NOTES_PROMPT);
+    expect(h.o.jobTriggerInvoker(jobs[0]!.id, BOT)).toEqual({ type: 'meet.ended', invokedBy: BOB });
+    expect(h.o.jobTriggerInvoker(jobs[0]!.id, BOB)).toBeNull();
+  });
+
+  it('its owner edits its name and instruction; the next run uses them', async () => {
+    const h = harness();
+    const sub = await h.o.createSubscription(meetingNotesSubscription({ organizationId: ORG, agentAccountId: BOT, ownerAccountId: BOB }));
+    expect(h.o.updateSubscription(sub.id, { name: 'Notes for Bob', prompt: 'Only remember who was there.' })).toMatchObject({ name: 'Notes for Bob', action: { kind: 'wake', prompt: 'Only remember who was there.' }, filter: { types: ['meet.ended'], consumerOwn: true } });
+    await h.o.publish(ev('meet.ended', { actor: null, audience: `account:${BOT}`, about: [BOT], channelId: undefined }));
+    await h.o.settled();
+    expect(h.o.jobBrief(h.o.listJobs(sub.id)[0]!.id, BOT)).toContain('Only remember who was there.');
+    expect(h.o.updateSubscription('nope', { name: 'x' })).toBeNull();
+    // Through the routes' operations: only its owner may edit it, not its agent.
+    expect(await subscriptionsAs(h.o as never, {} as never, BOT, 'u-bot').update(sub.id, { name: 'mine now' })).toBeNull();
+    expect(await subscriptionsAs(h.o as never, {} as never, BOB, 'u-bob').update(sub.id, { name: 'Meeting notes' })).toMatchObject({ name: 'Meeting notes' });
   });
 });
 
