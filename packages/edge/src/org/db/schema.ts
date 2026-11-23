@@ -733,6 +733,12 @@ export const meetings = sqliteTable(
     chatChannelId: text('chat_channel_id').references(() => channels.id, { onDelete: 'set null' }),
     /** When the room's current (or last) session began: its date line in the chat, and the start of guests' visits. */
     sessionStartedAt: integer('session_started_at', { mode: 'timestamp_ms' }),
+    /**
+     * RTK transcribes the room's sessions (`transcribe_on_end`, ruling 2026-11-23): RTK only does it for a session when
+     * it was on before the session began, so it is on from the room's creation, and set once on older rooms at a join.
+     * Only a recorded session's transcript is kept (meetingRecordings.ts).
+     */
+    transcribeOn: integer('transcribe_on', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [
     index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt),

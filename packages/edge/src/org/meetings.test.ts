@@ -115,6 +115,24 @@ describe('a meeting room', () => {
     expect(live).toEqual([expect.objectContaining({ id: m.id, startedAt: '2026-11-16T10:00:00Z', people: [{ userId: ANN, name: 'Ann Lee' }] })]);
   });
 
+  it('is transcribed by RTK from its creation; an older room is switched on at its next join, once', async () => {
+    fakeRtk({
+      'POST /meetings': { id: 'rtk-m1' },
+      'POST /meetings/rtk-m1/participants': { id: 'p-ann', token: 'tok-1' },
+      'POST /meetings/rtk-m1/participants/p-ann/token': { token: 'tok-2' },
+      'PATCH /meetings/rtk-m1': {},
+    });
+    const m = await withDb(db, () => createMeeting(workspaceId, ANN));
+    expect(calls[0]?.body).toMatchObject({ transcribe_on_end: true });
+    await withDb(db, () => joinMeeting(m.code, ANN));
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    // A room from before (transcribe_on false): the next join switches RTK on, and only that one.
+    sqlite.prepare('UPDATE meetings SET transcribe_on = 0 WHERE id = ?').run(m.id);
+    await withDb(db, () => joinMeeting(m.code, ANN));
+    await withDb(db, () => joinMeeting(m.code, ANN));
+    expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ transcribe_on_end: true }]);
+  });
+
   it('answers 503 when Meet is not set up', async () => {
     const saved = process.env.RTK_API_TOKEN;
     delete process.env.RTK_API_TOKEN;

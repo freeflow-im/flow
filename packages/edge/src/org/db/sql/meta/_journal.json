@@ -141,6 +141,13 @@
       "when": 1795405049258,
       "tag": "0019_meeting_agents",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1795407969264,
+      "tag": "0020_meeting_transcribe_on",
+      "breakpoints": true
     }
   ]
 }
