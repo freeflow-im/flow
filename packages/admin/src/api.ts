@@ -59,14 +59,14 @@ async function uploadFile(workspaceId: string, file: File): Promise<FileDTO> {
 
 const ws = (id: string) => `/v1/workspaces/${encodeURIComponent(id)}`;
 
-import type { AgentAvatarPreset, AssistantPrompts, AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
+import type { AgentAvatarPreset, AssistantPrompts, AssistantSettings, AssistantSettingsUpdate, ModelEntryInput, OrgModelsDTO } from '@flow/shared/assistant';
 
 /** The person's own assistant (docs/specs/agents.md §1.1): its definition, who may mail it, and the model it runs on, from
  * the platform's /v1 routes, so this app depends on no other app (decision_log 2026-11-11). */
 const mine = (id: string, part: 'definition' | 'senders' | 'model') => `/v1/workspaces/${encodeURIComponent(id)}/assistant/${part}`;
 export const assistantApi = {
   definition: async (org: string) => (await request<{ definition: AgentDefinitionDTO }>('GET', mine(org, 'definition'))).definition,
-  saveDefinition: async (org: string, body: { name?: string; instructions?: string }) => (await request<{ definition: AgentDefinitionDTO }>('PUT', mine(org, 'definition'), body)).definition,
+  saveDefinition: async (org: string, body: { name?: string; instructions?: string; modelId?: string | null }) => (await request<{ definition: AgentDefinitionDTO }>('PUT', mine(org, 'definition'), body)).definition,
   allowlist: async (org: string) => (await request<{ senders: string[] }>('GET', mine(org, 'senders'))).senders,
   saveAllowlist: async (org: string, senders: string[]) => (await request<{ senders: string[] }>('PUT', mine(org, 'senders'), { senders })).senders,
   /** Whether it answers allowlisted mail on its own (off by default). */
@@ -74,6 +74,13 @@ export const assistantApi = {
   saveAutoReply: async (org: string, autoReply: boolean) => (await request<{ autoReply?: boolean }>('PUT', mine(org, 'senders'), { autoReply })).autoReply === true,
   settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', mine(org, 'model'))).settings,
   saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', mine(org, 'model'), body)).settings,
+  // The organization's model list (task #26): anyone reads it, owners and admins change it.
+  models: (org: string) => request<OrgModelsDTO>('GET', `${ws(org)}/assistant/models`),
+  addModel: async (org: string, body: ModelEntryInput) => (await request<{ models: OrgModelsDTO }>('POST', `${ws(org)}/assistant/models`, body)).models,
+  removeModel: async (org: string, id: string) => (await request<{ models: OrgModelsDTO }>('DELETE', `${ws(org)}/assistant/models/${encodeURIComponent(id)}`)).models,
+  makeDefaultModel: async (org: string, id: string) => (await request<{ models: OrgModelsDTO }>('PUT', `${ws(org)}/assistant/models/${encodeURIComponent(id)}/default`)).models,
+  removeKey: (org: string, provider: 'anthropic' | 'openai' | 'openrouter' | 'brave') => request<OrgModelsDTO>('DELETE', `${ws(org)}/assistant/keys/${provider}`),
+  setBraveKey: async (org: string, key: string) => (await request<{ models: OrgModelsDTO }>('PUT', `${ws(org)}/assistant/keys/brave`, { key })).models,
   /** Its picture: a preset (null for none), or an upload. */
   // The assistant's picture, or with `agent` another agent the person may change (agents.md §1.3).
   setPreset: (org: string, preset: AgentAvatarPreset | null, agent?: string) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`, { preset }),
@@ -192,7 +199,7 @@ export const adminApi = {
   // Hosted shared agents (docs/specs/agents.md §6): made here, with a definition kept by the agent's runtime.
   // A person's own private agents (docs/specs/agents.md §1.3): their assistant first, up to five in all.
   myAgents: (id: string) => request<{ agents: UsableAgentDTO[]; limit: number }>('GET', `${ws(id)}/agents/mine`),
-  makePersonalAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
+  makePersonalAgent: (id: string, body: { name: string; instructions?: string; modelId?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
   removeMyAgent: (id: string, userId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/agents/personal/${encodeURIComponent(userId)}`),
   // An agent's AI usage (Members › Usage): its model tokens in thousands, by hour for a day or by day for 7 or 30, and per model; `tz` puts a day at the viewer's midnight.
   // `model`: one model's usage (its id, '' for usage with no model known); null for every model.
@@ -201,7 +208,7 @@ export const adminApi = {
   agentMemory: (id: string, userId: string) => request<{ files: MemoryFileDTO[]; shared: boolean; mayEditTeam: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`),
   saveAgentMemory: (id: string, userId: string, body: { path: string; body: string }) => request<{ ok: true }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`, body),
   forgetAgentMemory: (id: string, userId: string, path?: string) => request<{ removed: number }>('DELETE', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory${path ? `?path=${encodeURIComponent(path)}` : ''}`),
-  makeHostedAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
+  makeHostedAgent: (id: string, body: { name: string; instructions?: string; modelId?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
   agentDefinition: (id: string, userId: string) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`),
-  saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),
+  saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string; modelId?: string | null }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),
 };

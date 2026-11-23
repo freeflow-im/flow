@@ -11,6 +11,7 @@ import { choiceUrl, PicturePicker, type PictureChoice } from './AgentPicture';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 import { HostedDefinition } from './Agents';
 import { AgentMemory } from './AgentMemory';
+import { ModelPicker } from './Models';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 type Access = 'private' | 'shared';
@@ -31,6 +32,8 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
   const [name, setName] = useState('');
   const [access, setAccess] = useState<Access>(initialAccess);
   const [instructions, setInstructions] = useState('');
+  // The model it is pinned to (task #26): '' for the organization's default, which it also falls back to.
+  const [modelId, setModelId] = useState('');
   // The picture waits for the agent to exist; an upload shows from a local preview meanwhile.
   const [picture, setPicture] = useState<PictureChoice>(null);
   const preview = usePreview(picture && 'file' in picture ? picture.file : null);
@@ -39,7 +42,7 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
   const full = access === 'private' && !!mine.data?.agents && count >= limit;
   const make = useMutation({
     mutationFn: async () => {
-      const body = { name: name.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}) };
+      const body = { name: name.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}), ...(modelId ? { modelId } : {}) };
       const made = access === 'private' ? await adminApi.makePersonalAgent(org.id, body) : await adminApi.makeHostedAgent(org.id, body);
       if (picture) {
         if ('preset' in picture) await assistantApi.setPreset(org.id, picture.preset, made.agent.id);
@@ -50,6 +53,7 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
     onSuccess: () => {
       setName('');
       setInstructions('');
+      setModelId('');
       setPicture(null);
       changed();
     },
@@ -98,6 +102,11 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
           <span className="font-medium">Instructions</span>
           <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={4} placeholder="What it is for, how it should answer, what to avoid." maxLength={8000} value={instructions} onChange={(e) => setInstructions(e.target.value)} data-testid="create-agent-instructions" />
         </label>
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Model</span>
+          <ModelPicker org={org} value={modelId} disabled={make.isPending} onChange={setModelId} testid="create-agent-model" />
+          <span className="text-xs text-muted">Pin it to one of the organization's models, or leave it on the default. If the pinned model is removed later, it runs on the default.</span>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button kind="primary" type="submit" disabled={make.isPending || !name.trim() || full} testid="create-agent-make">
             {make.isPending ? 'Creating…' : 'Create agent'}

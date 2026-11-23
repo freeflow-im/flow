@@ -138,6 +138,12 @@ export class AssistantSettingsStore {
     return { provider: p, apiKey, model: modelOf(row, p) };
   }
 
+  /** The user's stored key for a provider, whatever the assistant runs on (an organization's model list uses each), or null. */
+  keyOf(userId: string, p: KeyProvider): string | null {
+    const stored = this.row(userId)?.[keyCol(p)];
+    return stored ? tryDecrypt(this.key, stored) : null;
+  }
+
   /** The user's stored OpenAI key, whatever the assistant runs on (image editing uses it), or null. */
   openaiKey(userId: string): string | null {
     const row = this.row(userId);

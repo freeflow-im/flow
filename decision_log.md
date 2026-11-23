@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-22 — An organization keeps several models, one the default; an agent may be pinned to one (Taskboard task 26)
+
+- **Decision:** this extends the 2026-11-11 "one model per organization" ruling. Owners and admins keep a list of
+  provider+model entries, one of which is the default. An agent's definition may pin it to one entry (`modelId`), and
+  it runs on the default when its pinned entry is removed or that entry's provider key is removed. Keys remain one per
+  provider.
+- **How:** the `org_models` table and the `org_model_default` state live in the `org:<id>` Assistant object. The first
+  read seeds the list from the organization's existing model. The runtime asks `orgModel(pin)` at each turn.
+- **Where:** `packages/edge/src/assistant/orgModel.ts`, `packages/admin/src/sections/Models.tsx`.
+
 ## 2026-11-22 — An /mcp personal agent posts in Chat as its own member (operator ruling)
 
 - **Ruling (Scott):** a personal agent on `/mcp` (Claude Desktop acting for a person) may use Chat, and posts **as

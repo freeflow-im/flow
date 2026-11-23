@@ -63,6 +63,20 @@ async function filesOf(req: Request): Promise<string[]> {
   return [...ids];
 }
 
+/** The model pin of the agent a request names (`?agent=`), else of the person's assistant (its runtime is their account's). */
+async function pinOf(c: C, req: Request, userId: string, organizationId: string, ownAccountId: string): Promise<string | null> {
+  const wanted = await agentOf(req);
+  let runtimeKey = ownAccountId;
+  if (wanted) {
+    const agent = (await directory(c, 'usableAgents', userId, organizationId)).find((a) => a.id === wanted);
+    if (!agent) return null;
+    if (agent.mode === 'personal' && !agent.self) runtimeKey = (await directory(c, 'hostedRuntimeOf', agent.accountId))?.runtimeKey ?? '';
+    else if (!agent.self) runtimeKey = agent.accountId;
+    if (!runtimeKey) return null;
+  }
+  return (await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(runtimeKey)).currentDefinition()).modelId ?? null;
+}
+
 async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
   try {
     if (!tokenOf(c)) return c.json({ error: 'Not signed in' }, 401);
@@ -79,7 +93,12 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
     // see it, an owner or admin sets it.
     if (new URL(req.url).pathname === '/api/settings/assistant') {
       const keeper = c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(orgModelKey(who.account.organizationId)));
-      if (req.method === 'GET') return c.json({ settings: await keeper.orgSettings() });
+      if (req.method === 'GET') {
+        // What the agent the panel talks to runs on (task #26): its pin, else the default. `?agent=` names one of the
+        // person's agents; without it, their assistant.
+        const pin = await pinOf(c, req, who.user.id, who.account.organizationId, who.account.id).catch(() => null);
+        return c.json({ settings: (await keeper.orgModel(pin)).shown });
+      }
       if (req.method !== 'PUT') return c.json({ error: 'Not found' }, 404);
       if (who.account.role !== 'owner' && who.account.role !== 'admin') return c.json({ error: "Only the organization's owners and admins choose the model its agents run on.", code: 'not_admin' }, 403);
       const answer = await keeper.updateOrgSettings(((await req.json().catch(() => ({}))) ?? {}) as never);
@@ -176,6 +195,57 @@ for (const [part, inner] of Object.entries(ASSISTANT_PARTS)) {
     });
   }
 }
+
+/**
+ * The organization's model list (task #26): every member reads it (to pin their own agents), its owners and admins change
+ * it. Kept by the `org:<id>` Assistant object (assistant/orgModel.ts).
+ */
+async function modelsCaller(c: C, admin: boolean): Promise<{ keeper: DurableObjectStub<Assistant> } | Response> {
+  const fail = (status: number, code: string, message: string) => c.json({ error: { code, message } }, status as 400);
+  if (!tokenOf(c)) return fail(401, 'unauthorized', 'Not signed in');
+  const organizationId = c.req.param('id')!;
+  const who = await resolveCaller(c, organizationId);
+  if (!who.user) return fail(401, 'unauthorized', 'Not signed in');
+  if (!who.account) return fail(403, 'no_account', 'You are not a member of this organization.');
+  const guest = guestRefusal(who.account, 'the assistant');
+  if (guest) return fail(403, guest.code, guest.message);
+  if (admin && who.account.role !== 'owner' && who.account.role !== 'admin') return fail(403, 'not_admin', "Only the organization's owners and admins choose the models its agents run on.");
+  return { keeper: c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(orgModelKey(who.account.organizationId))) };
+}
+type Answer<T> = { ok: true } & T | { ok: false; message: string };
+const answer = <T extends object>(c: C, a: Answer<T>) => (a.ok ? c.json(a) : c.json({ error: { code: 'invalid', message: a.message } }, 400));
+
+assistantRoutes.get('/v1/workspaces/:id/assistant/models', async (c) => {
+  const r = await modelsCaller(c, false);
+  return r instanceof Response ? r : c.json(await r.keeper.orgModels());
+});
+assistantRoutes.post('/v1/workspaces/:id/assistant/models', async (c) => {
+  const r = await modelsCaller(c, true);
+  if (r instanceof Response) return r;
+  return answer(c, await r.keeper.addOrgModel(((await c.req.json().catch(() => ({}))) ?? {}) as never));
+});
+assistantRoutes.delete('/v1/workspaces/:id/assistant/models/:entry', async (c) => {
+  const r = await modelsCaller(c, true);
+  return r instanceof Response ? r : answer(c, await r.keeper.changeOrgModel(c.req.param('entry'), 'remove'));
+});
+assistantRoutes.put('/v1/workspaces/:id/assistant/models/:entry/default', async (c) => {
+  const r = await modelsCaller(c, true);
+  return r instanceof Response ? r : answer(c, await r.keeper.changeOrgModel(c.req.param('entry'), 'default'));
+});
+assistantRoutes.put('/v1/workspaces/:id/assistant/keys/brave', async (c) => {
+  const r = await modelsCaller(c, true);
+  if (r instanceof Response) return r;
+  const key = (((await c.req.json().catch(() => ({}))) ?? {}) as { key?: unknown }).key;
+  if (typeof key !== 'string' || !key.trim()) return c.json({ error: { code: 'invalid', message: 'Enter the Brave Search API key.' } }, 400);
+  return answer(c, await r.keeper.setOrgBraveKey(key.trim()));
+});
+assistantRoutes.delete('/v1/workspaces/:id/assistant/keys/:provider', async (c) => {
+  const r = await modelsCaller(c, true);
+  if (r instanceof Response) return r;
+  const p = c.req.param('provider');
+  if (p !== 'anthropic' && p !== 'openai' && p !== 'openrouter' && p !== 'brave') return c.json({ error: { code: 'not_found', message: 'No such key.' } }, 404);
+  return c.json(await r.keeper.removeOrgKey(p));
+});
 
 /** The agents the person may talk to from the panel in the organization (agents.md §6): their assistant, hosted shared agents. */
 assistantRoutes.get('/api/agent/agents', async (c) => {

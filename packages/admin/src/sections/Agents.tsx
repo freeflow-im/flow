@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
 import { suite } from '../suite';
-import { Model } from './Assistant';
+import { ModelPicker, Models } from './Models';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 import { CreateAgent } from './CreateAgent';
 import { AgentMemory } from './AgentMemory';
@@ -39,7 +39,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
 
   return (
     <>
-      <Model org={org} />
+      <Models org={org} />
       <TeamAgent org={org} />
       <CreateAgent org={org} initialAccess="shared" />
       <InviteAgent org={org} />
@@ -167,8 +167,14 @@ function TeamAgent({ org }: { org: WorkspaceDTO }) {
 export function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; userId: string; name: string }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState<string | null>(null);
+  // The model it is pinned to (task #26): '' for the organization's default; null while unchanged.
+  const [pin, setPin] = useState<string | null>(null);
   const def = useQuery({ queryKey: ['agent-definition', org.id, userId], queryFn: () => adminApi.agentDefinition(org.id, userId), enabled: open });
-  const save = useMutation({ mutationFn: (instructions: string) => adminApi.saveAgentDefinition(org.id, userId, { instructions }), onSuccess: () => { setOpen(false); setText(null); } });
+  const close = () => { setOpen(false); setText(null); setPin(null); };
+  const save = useMutation({
+    mutationFn: () => adminApi.saveAgentDefinition(org.id, userId, { ...(text !== null ? { instructions: text } : {}), ...(pin !== null ? { modelId: pin || null } : {}) }),
+    onSuccess: close,
+  });
   const current = text ?? def.data?.definition.instructions ?? '';
   if (!open) {
     return (
@@ -177,14 +183,21 @@ export function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; use
       </Button>
     );
   }
+  const mayEdit = !!def.data?.mayEdit;
   return (
     <div className="flex w-full flex-col gap-2 pt-1" data-testid={`agent-instructions-editor-${name}`}>
-      <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={3} maxLength={8000} value={current} disabled={def.isLoading || !def.data?.mayEdit} onChange={(e) => setText(e.target.value)} data-testid={`agent-instructions-text-${name}`} />
+      <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={3} maxLength={8000} value={current} disabled={def.isLoading || !mayEdit} onChange={(e) => setText(e.target.value)} data-testid={`agent-instructions-text-${name}`} />
+      {def.data && (
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-medium">Model</span>
+          <ModelPicker org={org} value={pin ?? def.data.definition.modelId ?? ''} disabled={!mayEdit} onChange={setPin} testid={`agent-model-${name}`} />
+        </label>
+      )}
       <div className="flex gap-2">
-        <Button kind="primary" disabled={save.isPending || !def.data?.mayEdit || text === null} onClick={() => save.mutate(current)} testid={`agent-instructions-save-${name}`}>
+        <Button kind="primary" disabled={save.isPending || !mayEdit || (text === null && pin === null)} onClick={() => save.mutate()} testid={`agent-instructions-save-${name}`}>
           Save
         </Button>
-        <Button kind="link" onClick={() => { setOpen(false); setText(null); }}>Close</Button>
+        <Button kind="link" onClick={close}>Close</Button>
       </div>
       <ErrorLine error={def.isError ? errorText(def.error) : save.isError ? errorText(save.error) : null} />
     </div>

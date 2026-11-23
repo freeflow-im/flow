@@ -4,23 +4,18 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDTO } from '@flow/shared';
-import { AGENT_AVATAR_PRESETS, ANTHROPIC_MODELS, assistantModelLabel, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
+import { AGENT_AVATAR_PRESETS } from '@flow/shared/assistant';
 import { adminApi, assistantApi } from '../api';
 import { tellHome } from '@flow/suite-bar';
 import { assistantChanged } from '@flow/suite-bar/assistant-dock';
 import { Button, Card, ErrorLine, Row } from '../components/ui';
 import { CreateAgent, MyAgents } from './CreateAgent';
 import { PicturePicker } from './AgentPicture';
+import { ModelPicker } from './Models';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const input = 'w-72 rounded-md border border-border px-2 py-1 text-sm';
 
-type KeyProvider = 'anthropic' | 'openai' | 'openrouter';
-const PROVIDERS: { id: KeyProvider; name: string; placeholder: string; keysAt: string }[] = [
-  { id: 'anthropic', name: 'Anthropic (Claude)', placeholder: 'sk-ant-…', keysAt: 'console.anthropic.com' },
-  { id: 'openai', name: 'OpenAI', placeholder: 'sk-…', keysAt: 'platform.openai.com' },
-  { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-…', keysAt: 'openrouter.ai/keys' },
-];
 
 export function Assistant({ org }: { org: WorkspaceDTO }) {
   return (
@@ -178,122 +173,32 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
   );
 }
 
-/** What it runs on: the organization's model, which its admins choose in Agents (operator ruling 2026-11-11). */
+/**
+ * What it runs on: the organization's default, or one of its models it is pinned to (task #26). Owners and admins keep
+ * the list under Agents; a pin to a model that is removed falls back to the default.
+ */
 function RunsOn({ org }: { org: WorkspaceDTO }) {
-  const settings = useQuery({ queryKey: ['assistant', org.id, 'settings'], queryFn: () => assistantApi.settings(org.id) });
-  const s = settings.data;
-  const label = s ? assistantModelLabel(s) : null;
-  return (
-    <Card title="Model" intro="Every agent in this organization runs on the model its owners and admins choose, under Agents." testid="card-assistant-runs-on">
-      {settings.isError && <ErrorLine error={errorText(settings.error)} />}
-      {label && <p className="text-sm" data-testid="assistant-runs-on">{label}</p>}
-    </Card>
-  );
-}
-
-/** The organization's model (Agents section, owners and admins): what every agent runs on, people's assistants included. */
-export function Model({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
-  const settings = useQuery({ queryKey: ['assistant', org.id, 'settings'], queryFn: () => assistantApi.settings(org.id) });
-  const s = settings.data;
-  const [provider, setProvider] = useState<AssistantProvider>('default');
-  const [models, setModels] = useState<Record<KeyProvider, string>>({ anthropic: '', openai: '', openrouter: '' });
-  const [key, setKey] = useState('');
-  const [braveKey, setBraveKey] = useState('');
+  const def = useQuery({ queryKey: ['assistant', org.id, 'definition'], queryFn: () => assistantApi.definition(org.id) });
   const [notice, setNotice] = useState<string | null>(null);
-  useEffect(() => {
-    if (!s) return;
-    setProvider(s.provider === 'default' && !s.builtIn ? 'anthropic' : s.provider);
-    setModels({ anthropic: s.anthropicModel, openai: s.openaiModel, openrouter: s.openrouterModel });
-    setKey('');
-    setBraveKey('');
-  }, [s]);
-  const current = PROVIDERS.find((p) => p.id === provider);
-  const savedKey = (p: KeyProvider, x: AssistantSettings) => ({ anthropic: x.anthropicKey, openai: x.openaiKey, openrouter: x.openrouterKey })[p];
-  const update = (): AssistantSettingsUpdate => ({
-    provider,
-    anthropicModel: models.anthropic as AssistantSettingsUpdate['anthropicModel'],
-    openaiModel: models.openai as AssistantSettingsUpdate['openaiModel'],
-    openrouterModel: models.openrouter.trim(),
-    ...(current && key.trim() ? { [`${current.id}Key`]: key.trim() } : {}),
-    ...(braveKey.trim() ? { braveKey: braveKey.trim() } : {}),
-  });
   const save = useMutation({
-    mutationFn: (p: { body: AssistantSettingsUpdate; done: string }) => assistantApi.saveSettings(org.id, p.body).then(() => p.done),
+    mutationFn: (modelId: string) => assistantApi.saveDefinition(org.id, { modelId: modelId || null }),
     onMutate: () => setNotice(null),
-    onSuccess: async (done) => {
-      setNotice(done);
-      await qc.invalidateQueries({ queryKey: ['assistant', org.id, 'settings'] });
+    onSuccess: async () => {
+      setNotice('Saved.');
+      await qc.invalidateQueries({ queryKey: ['assistant', org.id, 'definition'] });
     },
   });
   return (
-    <Card title="Model for every agent" intro="What every agent in this organization runs on, each person's assistant included: the built-in model, or Anthropic, OpenAI or OpenRouter billed to the organization's API key. Keys are stored encrypted and never shown again." testid="card-assistant-model">
-      {settings.isError && <ErrorLine error={errorText(settings.error)} />}
-      {s && (
-        <form
-          className="flex flex-col gap-4"
-          autoComplete="off"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate({ body: update(), done: 'Saved.' });
-          }}
-        >
-          <Row label="Runs on">
-            <select className={input} value={provider} onChange={(e) => setProvider(e.target.value as AssistantProvider)} data-testid="assistant-provider">
-              {s.builtIn && <option value="default">Built-in model</option>}
-              {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}, with my API key
-                </option>
-              ))}
-            </select>
-          </Row>
-          {current && (
-            <>
-              <Row label={`${current.name.replace(/ \(.*\)/, '')} API key`} help={savedKey(current.id, s) ? undefined : `Get one at ${current.keysAt}.`}>
-                <input type="password" autoComplete="new-password" className={input} value={key} placeholder={savedKey(current.id, s) ? `Saved (${savedKey(current.id, s)}); leave blank to keep` : current.placeholder} onChange={(e) => setKey(e.target.value)} data-testid="assistant-key" />
-              </Row>
-              <Row label="Model">
-                {current.id === 'openrouter' ? (
-                  <>
-                    <input className={input} list="openrouter-models" value={models.openrouter} placeholder="author/model" spellCheck={false} onChange={(e) => setModels({ ...models, openrouter: e.target.value })} />
-                    <datalist id="openrouter-models">
-                      {OPENROUTER_MODELS.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </datalist>
-                  </>
-                ) : (
-                  <select className={input} value={models[current.id]} onChange={(e) => setModels({ ...models, [current.id]: e.target.value })}>
-                    {(current.id === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} · {m.hint}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </Row>
-            </>
-          )}
-          <Row label="Brave Search API key (optional)" help="For web and image search; without one it uses the model's own search.">
-            <input type="password" autoComplete="new-password" className={input} value={braveKey} placeholder={s.braveKey ? `Saved (${s.braveKey}); leave blank to keep` : 'BSA…'} onChange={(e) => setBraveKey(e.target.value)} />
-          </Row>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button kind="primary" type="submit" disabled={save.isPending} testid="assistant-model-save">
-              {save.isPending ? 'Checking…' : 'Save'}
-            </Button>
-            {current && savedKey(current.id, s) && (
-              <Button kind="danger" disabled={save.isPending} onClick={() => save.mutate({ body: { ...update(), provider: s.provider === current.id ? 'default' : s.provider, [`${current.id}Key`]: null }, done: 'The key was removed.' })}>
-                Remove saved key
-              </Button>
-            )}
-            {notice && <span className="text-xs text-muted">{notice}</span>}
-          </div>
-          <ErrorLine error={save.isError ? errorText(save.error) : null} />
-        </form>
+    <Card title="Model" intro="The model your assistant runs on: the organization's default, or another of the models its owners and admins set up under Agents." testid="card-assistant-runs-on">
+      {def.isError && <ErrorLine error={errorText(def.error)} />}
+      {def.data && (
+        <div className="flex items-center gap-3">
+          <ModelPicker org={org} value={def.data.modelId ?? ''} disabled={save.isPending} onChange={(id) => save.mutate(id)} testid="assistant-runs-on" />
+          {notice && <span className="text-xs text-muted">{notice}</span>}
+        </div>
       )}
+      <ErrorLine error={save.isError ? errorText(save.error) : null} />
     </Card>
   );
 }

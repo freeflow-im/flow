@@ -8,6 +8,7 @@ import { Assistant } from './Assistant';
 const org: WorkspaceDTO = {
   id: 'o1', slug: 'acme', name: 'Acme', createdBy: 'u-ann', createdAt: '2026-01-01T00:00:00.000Z', sidebarColor: 'violet', avatarUrl: null, googleSelfRegisterDomain: null, role: 'member',
 };
+const MODELS = { entries: [{ id: 'e-sonnet', provider: 'anthropic', model: 'claude-sonnet-5-5', label: 'Anthropic · Claude Sonnet 5.5', ready: true }, { id: 'e-luna', provider: 'openai', model: 'gpt-6-luna', label: 'OpenAI · Luna', ready: true }], defaultId: 'e-sonnet', builtIn: true, keys: { anthropic: '••••abcd', openai: '••••wxyz', openrouter: null, brave: null } };
 let calls: { method: string; path: string; body?: unknown }[];
 
 beforeEach(() => {
@@ -22,7 +23,8 @@ beforeEach(() => {
     if (bare === '/v1/me') return json({ id: 'u-ann', displayName: 'Ann' });
     if (bare.endsWith('/agents/mine')) return json({ agents: [{ id: 'u-ada', accountId: 'a-ada', displayName: 'Ada', mode: 'personal', self: true }], limit: 5 });
     if (bare.endsWith('/members')) return json({ members: [{ userId: 'u-ada', displayName: 'Ada', kind: 'personal_agent', agentRuntime: 'hosted', sponsorId: 'u-ann', address: 'ada@acme.test', isAgent: true }] });
-    if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name, instructions: body.instructions, updatedAt: null } : { name: 'Ann’s assistant', instructions: '', updatedAt: null } });
+    if (bare === '/v1/workspaces/o1/assistant/models') return json(MODELS);
+    if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name ?? 'Ann’s assistant', instructions: body.instructions ?? '', ...(body.modelId ? { modelId: body.modelId } : {}), updatedAt: null } : { name: 'Ann’s assistant', instructions: '', modelId: 'e-gone', updatedAt: null } });
     if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [] });
     if (bare === '/v1/workspaces/o1/assistant/model') return json({ settings: { provider: 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: null, openaiKey: null, openrouterKey: null, braveKey: null } });
     if (bare === '/v1/workspaces/o1/assistant/avatar' && method === 'PUT') return json({ avatarUrl: body.preset ? `/agent-avatars/${body.preset}.svg` : null });
@@ -63,9 +65,13 @@ describe('Your assistant', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/senders' && JSON.stringify((c.body as { senders: string[] }).senders) === '["ann@acme.test","pat@partner.example"]')).toBe(true));
   });
 
-  it('says what it runs on: the organization’s model, set in Agents', async () => {
+  it('runs on the organization’s default unless pinned; a pin to a removed model says it falls back (task #26)', async () => {
     mount();
-    expect((await screen.findByTestId('assistant-runs-on')).textContent).toBe('The built-in model');
+    const pick = (await screen.findByTestId('assistant-runs-on')) as HTMLSelectElement;
+    await screen.findByTestId('assistant-runs-on-gone');
+    expect(pick.value).toBe('');
+    fireEvent.change(pick, { target: { value: 'e-luna' } });
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/definition' && (c.body as { modelId: string }).modelId === 'e-luna')).toBe(true));
     expect(screen.queryByTestId('assistant-provider')).toBeNull();
   });
 });

@@ -286,6 +286,8 @@ export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 export interface AgentDefinition {
   name: string;
   instructions: string;
+  /** The organization model entry it is pinned to (task #26); absent or null: the organization's default. */
+  modelId?: string | null;
   updatedAt: string | null;
 }
 
