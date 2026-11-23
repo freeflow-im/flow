@@ -19,6 +19,8 @@ export interface SubscriptionOps {
   read(id: string, limit?: number, waitS?: number): Promise<SubscriptionRead | null>;
   ack(id: string, cursor: number): Promise<number | null>;
   remove(id: string): Promise<boolean>;
+  /** Its owner changes its name or what it does (a wake's prompt, a post's body); null when it is not theirs. */
+  update(id: string, patch: { name?: string; prompt?: string }): Promise<SubscriptionDTO | null>;
   /** Run now: a scheduled subscription the caller owns fires once, as its timer would. False when it is not theirs or has no schedule. */
   run(id: string): Promise<boolean>;
   /** A subscription's last 50 jobs, for its owner or its agent; null when it is neither's. */
@@ -77,6 +79,11 @@ export function subscriptionsAs(
       const sub = await get(id);
       return sub && (sub.consumer === accountId || sub.owner === accountId) ? ((await events.deleteSubscription(id)) as boolean) : false;
     },
+    update: async (id, patch) => {
+      const sub = await get(id);
+      if (!sub || sub.owner !== accountId || !sub.action || sub.schedule?.every === 'once') return null;
+      return (await events.updateSubscription(id, patch)) as SubscriptionDTO | null;
+    },
     run: async (id) => {
       const sub = await get(id);
       if (!sub || sub.owner !== accountId || !sub.schedule) return false;
@@ -105,6 +112,7 @@ export function lazySubscriptions(make: () => Promise<SubscriptionOps>): Subscri
     read: async (id, limit, waitS) => (await get()).read(id, limit, waitS),
     ack: async (id, cursor) => (await get()).ack(id, cursor),
     remove: async (id) => (await get()).remove(id),
+    update: async (id, patch) => (await get()).update(id, patch),
     run: async (id) => (await get()).run(id),
     jobs: async (id) => (await get()).jobs(id),
     jobStep: async (id, step, opts) => (await get()).jobStep(id, step, opts),

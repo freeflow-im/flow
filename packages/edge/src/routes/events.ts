@@ -5,7 +5,7 @@
 // agent it sponsors, for `wake`). A wake job's agent acks it, extends its lease and says it is done under /v1/events/jobs.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody, ScheduleWakeBody, ShowAlertBody } from '@flow/shared';
+import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody, ScheduleWakeBody, ShowAlertBody, UpdateSubscriptionBody } from '@flow/shared';
 import type { Events } from '../events/object';
 import type { ReadQuery } from '../events/core';
 import { subscriptionsAs, wakesAs } from '../events/subscriptions';
@@ -137,6 +137,16 @@ eventRoutes.post('/v1/events/subscriptions/:id/ack', async (c) => {
 eventRoutes.post('/v1/events/subscriptions/:id/run', async (c) => {
   if (!(await (await opsOf(c)).run(c.req.param('id')))) throw noSuch();
   return c.json({ ok: true }, 202);
+});
+
+// Edit: its owner changes its name or its instruction (a wake's prompt, a post's body); the rest stays (task 32).
+eventRoutes.patch('/v1/events/subscriptions/:id', async (c) => {
+  const ops = await opsOf(c);
+  const body = await bodyOf(UpdateSubscriptionBody, c);
+  if (body.name === undefined && body.prompt === undefined) throw badRequest('nothing_to_change', 'give name or prompt');
+  const sub = await ops.update(c.req.param('id'), body);
+  if (!sub) throw noSuch();
+  return c.json({ subscription: sub });
 });
 
 eventRoutes.delete('/v1/events/subscriptions/:id', async (c) => {

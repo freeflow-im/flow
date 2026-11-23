@@ -212,6 +212,30 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
   const [open, setOpen] = useState(false);
   const ws = `workspace=${encodeURIComponent(workspaceId)}`;
 
+  // Edit (task 32): its name and its instruction (a wake's prompt, a post's body); the rest stays.
+  const a = sub.action;
+  const instruction = a?.kind === 'wake' ? a.prompt : a?.kind === 'post' ? a.body : null;
+  const editable = instruction !== null && !selfWake;
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(sub.name);
+  const [text, setText] = useState(instruction ?? '');
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api('PATCH', `/v1/events/subscriptions/${encodeURIComponent(sub.id)}?${ws}`, {
+        ...(name.trim() !== sub.name ? { name: name.trim() } : {}),
+        ...(text.trim() !== (instruction ?? '') ? { prompt: text.trim() } : {}),
+      });
+      setEditing(false);
+      await onDeleted();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const remove = async () => {
     setBusy(true);
     setError(null);
@@ -290,6 +314,15 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
               {started ? 'Running…' : 'Run now'}
             </button>
           )}
+          {editable && !confirming && !editing && (
+            <button
+              data-testid={`automation-edit-${sub.id}`}
+              className="rounded border border-border px-2.5 py-1 text-xs hover:bg-hover"
+              onClick={() => { setName(sub.name); setText(instruction ?? ''); setEditing(true); }}
+            >
+              Edit
+            </button>
+          )}
           {confirming ? (
             <span className="inline-flex items-center gap-2">
               <span className="text-xs text-muted">{selfWake ? 'Cancel this wake?' : 'Delete?'}</span>
@@ -316,6 +349,29 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
           )}
         </div>
       </div>
+      {editing && (
+        <div data-testid={`automation-editor-${sub.id}`} className="mt-2 space-y-2 rounded border border-hairline p-2">
+          <label className="block text-xs text-muted">
+            Name
+            <input data-testid={`automation-edit-name-${sub.id}`} className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="block text-xs text-muted">
+            {a?.kind === 'post' ? 'Message' : 'Instruction'}
+            <textarea data-testid={`automation-edit-prompt-${sub.id}`} className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm" rows={6} value={text} maxLength={4000} onChange={(e) => setText(e.target.value)} />
+          </label>
+          <div className="flex gap-2">
+            <button
+              data-testid={`automation-edit-save-${sub.id}`}
+              className="rounded bg-accent px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+              disabled={busy || !name.trim() || !text.trim()}
+              onClick={() => void save()}
+            >
+              Save
+            </button>
+            <button className="text-xs text-muted hover:underline" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
       {sub.delivery === 'wake' && (
         <div className="mt-1">

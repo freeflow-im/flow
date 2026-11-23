@@ -891,6 +891,13 @@ export const AckSubscriptionBody = z.object({
 });
 export type AckSubscriptionBody = z.infer<typeof AckSubscriptionBody>;
 
+/** PATCH /v1/events/subscriptions/:id: its owner renames an automation or changes its instruction (a wake's prompt, a post's body). */
+export const UpdateSubscriptionBody = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  prompt: z.string().trim().min(1).max(4000).optional(),
+}).strict();
+export type UpdateSubscriptionBody = z.infer<typeof UpdateSubscriptionBody>;
+
 /** POST /v1/workspaces/:id/domains: a domain the organization will verify (platform.md §3.2). The directory checks it is a hostname. */
 export const AddDomainBody = z.object({
   domain: z.string().trim().min(3).max(253).toLowerCase(),
