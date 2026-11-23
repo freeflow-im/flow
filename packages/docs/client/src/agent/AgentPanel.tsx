@@ -63,15 +63,15 @@ export function AgentPanel() {
   // Docked, the panel and the page beside it share the window; the panel takes at most half of it.
   const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
-  // What the agents run on (the organization's model in the suite; the person's own choice in the desktop app): on
-  // hovering (or focusing) the agent's name, as in Mail's and Calendar's panels.
+  // What the picked agent runs on (its model pin, else the organization's default, in the suite; the person's own choice
+  // in the desktop app): on hovering (or focusing) the agent's name, as in Mail's and Calendar's panels.
   const orgId = useOrganization().active?.id ?? null;
   const [model, setModel] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    api.assistantSettings().then((r) => live && setModel(assistantModelLabel(r.settings)), () => live && setModel(null));
+    api.assistantSettings(agent.agentId).then((r) => live && setModel(assistantModelLabel(r.settings)), () => live && setModel(null));
     return () => { live = false; };
-  }, [orgId]);
+  }, [orgId, agent.agentId]);
   const modelTip = useModelTooltip(model);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);

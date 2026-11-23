@@ -29,14 +29,18 @@ export function useMyAssistant(organizationId: string | null): MyAssistant | nul
 }
 
 /**
- * What the person's assistant runs on in the organization, in words (`GET /api/settings/assistant`: the organization's
- * model, which anyone in it may see and its owners and admins set): for the panel's name, as its tooltip. Null until known.
+ * What an agent runs on in the organization, in words (`GET /api/settings/assistant`): its model pin, else the
+ * organization's default. `agentId`: one of the person's other agents; none, their own assistant. For the panel's name,
+ * as its tooltip. Null until known.
  */
-export function useAssistantModel(organizationId: string | null): string | null {
+export function useAssistantModel(organizationId: string | null, agentId: string | null = null): string | null {
   const [label, setLabel] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    const url = organizationId ? `/api/settings/assistant?workspace=${encodeURIComponent(organizationId)}` : '/api/settings/assistant';
+    const q = new URLSearchParams();
+    if (organizationId) q.set('workspace', organizationId);
+    if (agentId) q.set('agent', agentId);
+    const url = `/api/settings/assistant${q.size ? `?${q}` : ''}`;
     fetch(url, { credentials: 'same-origin', headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((body: { settings?: AssistantSettings } | null) => {
@@ -44,7 +48,7 @@ export function useAssistantModel(organizationId: string | null): string | null 
       })
       .catch(() => live && setLabel(null));
     return () => { live = false; };
-  }, [organizationId]);
+  }, [organizationId, agentId]);
   return label;
 }
 
