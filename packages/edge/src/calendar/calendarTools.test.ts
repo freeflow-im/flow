@@ -192,6 +192,51 @@ describe('the Calendar tools on native calendars', () => {
   });
 });
 
+// A personal agent's own calendar (agents.md §1.1): its turns run as its sponsor (Ann), and its own calendar sits beside hers.
+describe('the Calendar tools with the agent\'s own calendar', () => {
+  const ADA = 'acct-ada', ADAS = `n.${ADA}.aaaaaaaaaaaa`;
+  const meeting = occ({ id: `${ADAS}:m1`, eventId: `${ADAS}:m1`, calendarId: ADAS, summary: 'Planning', organizer: { name: 'Bob', email: 'bob@acme.freeflow.im', role: 'required', response: 'accepted' } });
+  function withAda() {
+    const sponsor = nativeFake({ 'GET /v1/calendar/events': () => ({ json: { events: [occ()] } }) });
+    const theirs = fake({
+      'GET /v1/calendar/calendars': () => ({ json: { calendars: [{ id: ADAS, accountId: 'nada', name: 'Calendar', color: '#00f', timezone: 'America/New_York', role: 'owner', hidden: false, isDefault: true, syncedAt: 'x' }] } }),
+      'GET /v1/calendar/events': () => ({ json: { events: [meeting] } }),
+      'GET /v1/calendar/events/:id': () => ({ json: { event: meeting } }),
+      'POST /v1/calendar/events': (b) => ({ status: 201, json: { event: occ({ id: `${ADAS}:n1`, calendarId: ADAS, summary: (b as { summary: string }).summary }) } }),
+    });
+    const ctx: CalendarToolContext = { ...sponsor.ctx, yours: { accountId: ADA, address: 'ada@acme.freeflow.im', calendar: theirs.ctx.calendar } };
+    return { ctx, sponsor: sponsor.asked, ada: theirs.asked };
+  }
+
+  it('lists it beside the sponsor\'s, marked yours', async () => {
+    const { ctx } = withAda();
+    const r = await tool('list_calendars').run(ctx, {});
+    expect(r.calendars).toContainEqual({ id: ADAS, name: 'Calendar', account: 'ada@acme.freeflow.im', native: true, yours: true, role: 'owner', timezone: 'America/New_York' });
+    expect((r.calendars as { id: string }[])[0]!.id).toBe(MINE);
+  });
+
+  it('reads, opens and adds to it on its own object; the sponsor\'s stay on hers', async () => {
+    const { ctx, sponsor, ada } = withAda();
+    const both = await tool('list_events').run(ctx, { from: '2026-11-01', to: '2026-11-08', calendars: [ADAS, 'cal1'] });
+    const events = both.events as { id: string; calendar: unknown }[];
+    expect(events.map((e) => e.id).sort()).toEqual(['cal1:u1', `${ADAS}:m1`]);
+    expect(events.find((e) => e.id === `${ADAS}:m1`)!.calendar).toEqual({ id: ADAS, name: 'Calendar', native: true, yours: true });
+    expect(ada.filter((a) => a.path.startsWith('/v1/calendar/events')).map((a) => a.path)).toEqual([expect.stringContaining(`calendars=${ADAS}`)]);
+    expect(sponsor.some((a) => a.path.includes(ADAS))).toBe(false);
+    expect((await tool('get_event').run(ctx, { id: `${ADAS}:m1` })).event).toMatchObject({ summary: 'Planning', organizer: 'Bob <bob@acme.freeflow.im>' });
+    const made = await tool('create_event').run(ctx, { summary: 'Prep', start: '2026-11-05T10:00:00Z', end: '2026-11-05T10:30:00Z', calendar_id: ADAS });
+    expect(made.created).toMatchObject({ summary: 'Prep', calendar: { id: ADAS, yours: true } });
+    expect(ada.at(-1)).toMatchObject({ method: 'POST', path: '/v1/calendar/events', body: { calendarId: ADAS } });
+  });
+
+  it('leaves list_events and create_event on the sponsor\'s calendars when none of its own is named', async () => {
+    const { ctx, sponsor, ada } = withAda();
+    await tool('list_events').run(ctx, { from: '2026-11-01', to: '2026-11-08' });
+    expect(sponsor.some((a) => a.path.startsWith('/v1/calendar/events'))).toBe(true);
+    expect(ada.some((a) => a.path.startsWith('/v1/calendar/events'))).toBe(false);
+  });
+});
+
 describe('free slots', () => {
   const NY = 'America/New_York';
   it('subtracts everyone\'s busy time from working hours, day by day, longest first', () => {
