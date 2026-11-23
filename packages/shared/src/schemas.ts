@@ -852,6 +852,17 @@ export const CreateSubscriptionBody = z.object({
 export type CreateSubscriptionBody = z.infer<typeof CreateSubscriptionBody>;
 
 /**
+ * PATCH /v1/events/subscriptions/:id: its owner changes an automation's name, a wake automation's prompt, or a post
+ * automation's message. What it listens to and whom it wakes stay: to change those, delete it and make another.
+ */
+export const UpdateSubscriptionBody = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  prompt: z.string().trim().min(1).max(4000).optional(),
+  body: z.string().trim().min(1).max(4000).optional(),
+}).strict().refine((b) => b.name !== undefined || b.prompt !== undefined || b.body !== undefined, { message: 'nothing to change' });
+export type UpdateSubscriptionBody = z.infer<typeof UpdateSubscriptionBody>;
+
+/**
  * POST /v1/events/wakes: an agent's one-time wake for itself (docs/specs/agent-self-wake.md), as the caller's account.
  * Exactly one of `at` (an ISO time with its offset) or `inMinutes`; where to answer (`channelId`, `threadRootId` in it).
  */

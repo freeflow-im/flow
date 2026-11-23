@@ -811,8 +811,10 @@ export const meetingAgents = sqliteTable(
     sessionId: text('session_id'),
     joinedAt: integer('joined_at', { mode: 'timestamp_ms' }).notNull(),
     leftAt: integer('left_at', { mode: 'timestamp_ms' }),
-    /** Its Notes' address in Docs, once written; '' while it writes them. */
+    /** Its Notes' address in Docs, once the agent saved them (save_meeting_notes). */
     notesUrl: text('notes_url'),
+    /** When `meet.ended` was published for it (the session's transcript saved, or none came): once per agent and session. */
+    endedAt: integer('ended_at', { mode: 'timestamp_ms' }),
   },
   (t) => [index('meeting_agents_meeting_idx').on(t.meetingId, t.joinedAt), index('meeting_agents_session_idx').on(t.sessionId)],
 );

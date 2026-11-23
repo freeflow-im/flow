@@ -2213,6 +2213,21 @@ one-recipient MCP correction).
 - **An editor tries the draft with its own access, not the author's.** Its dev-install calls carry the editor's ticket,
   so an agent never reaches the author's data through an app it edits (§9.3, §11).
 
+## 2026-11-23 — Agents remember through events (task 32; `docs/specs/agents.md` §6.1, `docs/specs/meetings.md` §1.6)
+
+- **Everything an agent does is an event; its memory stays its own** (operator ruling, Scott). Meet logs
+  `meet.agent.joined` and `meet.ended` as the agent's own events. Agents get `search_events` to look back through the
+  log as the turn's account: a personal agent sees its sponsor's events, a shared agent its own and those of the person
+  who asked, nobody else's. The server writes nothing into an agent's memory.
+- **Meeting notes are a built-in automation, not a server turn** (operator ruling). It is made the first time an agent
+  is sent to a meeting, owned by its sponsor, visible in Automations, and people can edit or delete it (a deletion is
+  remembered, so it is not made again). It tells the agent to write the notes, save them in the meeting's folder as the
+  sender (`save_meeting_notes`) and add a memory entry. It replaces the phase 5 Notes turn, so there is one summary.
+- **Automations can be edited** (needed for the above): the owner changes the name and a wake's prompt or a post's
+  message; what it listens to and whom it wakes stay.
+- **A server-made `consumerOwn` automation may act on the events of any agent its owner sponsors**, shared ones too, so
+  a shared agent's Meeting notes work like a personal agent's. Requests cannot set `consumerOwn`.
+
 ## 2026-11-23 — Agents in Meet meetings (`docs/specs/meetings.md` §1.6, phase 5)
 
 - **No live transcript for agents** (operator ruling): RTK gives an agent the live transcript only when every speaker's

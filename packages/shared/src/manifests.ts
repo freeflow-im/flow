@@ -193,7 +193,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs', 'schedule_wake', 'list_wakes', 'cancel_wake', 'show_alert',
+      'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs', 'schedule_wake', 'list_wakes', 'cancel_wake', 'show_alert', 'search_events',
     ],
     scopes: [
       {
@@ -241,12 +241,12 @@ export const APP_MANIFESTS: AppManifest[] = [
     scope: 'organization',
     kinds: [],
     // Its tools at /mcp (docs/specs/suite-mcp.md §5).
-    tools: ['create_meeting', 'list_live_meetings'],
+    tools: ['create_meeting', 'list_live_meetings', 'save_meeting_notes'],
     scopes: [
       {
         id: 'meet',
         label: 'Meet: make meeting rooms',
-        detail: 'Make FreeFlow Meet rooms in the organization below, to put on events or send to people, and see the meetings happening now. It never joins a meeting.',
+        detail: 'Make FreeFlow Meet rooms in the organization below, to put on events or send to people, see the meetings happening now, and save its notes of a meeting someone sent it to. It joins a meeting only when a person sends it.',
         readOnly: { label: 'Meet: see the meetings happening now', detail: 'The FreeFlow Meet meetings of the organization below that have people in them now.' },
         scopes: ['meet:read', 'meet:write'],
         checkedByDefault: true,
@@ -261,7 +261,9 @@ export const APP_MANIFESTS: AppManifest[] = [
       // A meeting's link opens for anyone (phase 3): a member signs in to join, a guest types a name (ruling R2).
       { path: '/meet/*', html: 'meet.html', passFiles: true, headers: PUBLIC },
     ],
-    events: [],
+    // An agent sent to a meeting, and the meeting it was in ending (Meet phase 5, org/services/meetingAgents.ts): the
+    // agent's own events, which its sponsor reads too. `meet.ended` is what the built-in "Meeting notes" automation wakes on.
+    events: ['meet.agent.joined', 'meet.ended'],
   },
   {
     // The assistant (platform.md §5.5): one object per account holding its chats, settings and usage, which runs the model

@@ -392,6 +392,11 @@ performed…"), which models already know.
   projects, and lessons from corrections. Not task progress, and not copies of mail or documents (refer to them). A
   long async job may keep a progress file under `/memories/jobs/`, removed when the job ends.
 - **Agents do not share memory.** Each agent has its own, including one person's several personal agents (§1.3).
+- **What an agent did is in the event log, not in its memory by itself** (decision_log 2026-11-23, task 32). Each
+  conversation starts without the others, so an agent finds what it did elsewhere in its memory files, then with
+  `search_events`: the log newest first, as the turn's account (a personal agent's sponsor, with their personal agents'
+  events; a shared agent, with the events of the person who asked). What should stay with the agent it writes in its
+  memory itself, as the built-in "Meeting notes" automation tells it to after a meeting (meetings.md §1.6).
 - **A personal agent** has one tree, `/memories/`, private to its sponsor like a mailbox.
 - **A shared agent** has two folders. `/memories/team/` is read in every turn, whoever asked. `/memories/you/` belongs
   to the person who asked the turn (`invokedBy`): the handler maps it to that person's own rows, so the agent never

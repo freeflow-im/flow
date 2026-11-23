@@ -64,7 +64,7 @@ import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 import { MEETING_FILES_DUE_SQL, saveDueMeetingFiles, setMeetingDocs } from './services/meetingRecordings';
 import type { Docs } from '../docs/object';
 import type { MeetingAgent } from '../meet/agent';
-import { agentLeft, setMeetingAgentHooks } from './services/meetingAgents';
+import { agentLeft, endOverdueMeetingAgents, ENDED_GRACE_MS, MEETING_AGENTS_DUE_SQL, saveMeetingNotes, setMeetingAgentHooks } from './services/meetingAgents';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
 /** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
@@ -174,7 +174,11 @@ export class Org extends DurableObject<OrgEnv> {
     setMeetingAgentHooks(agents && env.ASSISTANT ? {
       join: (p) => agents.get(agents.idFromName(p.meetingAgentId)).start(p),
       recall: (id) => agents.get(agents.idFromName(id)).stop(),
-      writeNotes: (p) => this.meetingNotesTurn(p),
+      publish: async (event) => {
+        if (!this.env.EVENTS) throw new Error('no event log');
+        await this.env.EVENTS.get(this.env.EVENTS.idFromName(event.organizationId)).publish(event);
+      },
+      ensureMeetingWake: (p) => this.ensureMeetingWake(p),
       adminAgentId: async () => (await this.ctx.storage.get<string>(ADMIN_AGENT_KEY)) ?? null,
     } : null);
     this.db = openDb(ctx.storage);
@@ -938,6 +942,22 @@ export class Org extends DurableObject<OrgEnv> {
       const live = await this.scoped(() => liveMeetings(org, p.userId));
       return { meetings: live.map((m) => ({ title: m.title, link: link(m.code), started_at: m.startedAt, people: m.people.map((x) => x.name) })) };
     }
+    if (p.tool === 'save_meeting_notes') {
+      // The agent the call is for: a personal agent acts as its sponsor (`via` names it), a shared agent as itself.
+      const agentUserId = p.via ? (this.isAgentUser(p.via) ? p.via : this.userOfAccount(p.via)) : this.isAgentUser(p.userId) ? p.userId : null;
+      if (!agentUserId) throw new Error('Only an agent that was sent to the meeting can save its notes.');
+      const input = p.input as { meeting_id?: unknown; session_id?: unknown; notes?: unknown };
+      try {
+        const saved = await this.scoped(() => saveMeetingNotes(agentUserId, {
+          meetingId: String(input.meeting_id ?? ''), notes: String(input.notes ?? ''),
+          ...(typeof input.session_id === 'string' && input.session_id ? { sessionId: input.session_id } : {}),
+        }), { depth: 1, ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) });
+        await this.logging;
+        return { saved: true, url: saved.url, folder: saved.folder, doc_id: saved.docId };
+      } catch (err) {
+        throw new Error((err as Error).message);
+      }
+    }
     throw new Error(`Unknown Meet tool ${p.tool}.`);
   }
 
@@ -1116,6 +1136,25 @@ export class Org extends DurableObject<OrgEnv> {
       ).toArray().map((r) => r.account_id as string);
     }
     return out;
+  }
+
+  /**
+   * The agents (personal or shared) each account sponsors: the agents whose own events a server-made automation of the
+   * sponsor's (`consumerOwn`, events/object.ts) may act on for the agent itself.
+   */
+  sponsoredAgentAccountsOf(accountIds: string[]): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const id of accountIds) {
+      out[id] = this.ctx.storage.sql.exec(
+        "SELECT a.account_id FROM workspace_members a JOIN workspace_members s ON s.user_id = a.sponsor_user_id JOIN users u ON u.id = a.user_id WHERE s.account_id = ? AND u.is_agent = 1 AND a.account_id IS NOT NULL",
+        id,
+      ).toArray().map((r) => r.account_id as string);
+    }
+    return out;
+  }
+
+  private isAgentUser(userId: string): boolean {
+    return this.ctx.storage.sql.exec('SELECT 1 AS x FROM users WHERE id = ? AND is_agent = 1', userId).toArray().length > 0;
   }
 
   private userOfAccount(accountId: string): string | null {
@@ -2246,7 +2285,10 @@ export class Org extends DurableObject<OrgEnv> {
     }
     // A meeting's recording or transcript RealtimeKit has made ready, for the copy to Docs (Meet phase 4): now.
     const meetingFiles = this.ctx.storage.sql.exec(MEETING_FILES_DUE_SQL).toArray().length ? Date.now() : null;
-    const due = [scheduled, push, sweep, visitorSweep, meetingFiles].filter((n): n is number => n !== null);
+    // An agent that left a meeting and has had no `meet.ended` yet: it gets one without a transcript after the grace.
+    const leftAt = this.ctx.storage.sql.exec(MEETING_AGENTS_DUE_SQL).toArray()[0]?.at as number | null | undefined;
+    const meetingEnded = leftAt ? leftAt + ENDED_GRACE_MS : null;
+    const due = [scheduled, push, sweep, visitorSweep, meetingFiles, meetingEnded].filter((n): n is number => n !== null);
     if (!due.length) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...due));
   }
@@ -2262,29 +2304,28 @@ export class Org extends DurableObject<OrgEnv> {
     await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
     await this.sweepVisitors().catch((err) => console.error(`[visitors] sweep: ${(err as Error).message}`));
     await this.scoped(() => saveDueMeetingFiles()).catch((err) => console.error(`[meet] recordings: ${(err as Error).message}`));
+    await this.scoped(() => endOverdueMeetingAgents()).catch((err) => console.error(`[meet] meet.ended sweep: ${(err as Error).message}`));
     await this.logging;
     await this.flushOutbox(null);
     await this.armAlarm();
   }
 
-  /** An agent's MeetingAgent object left its meeting (meet/agent.ts): it is no longer in the room. */
+  /** An agent's MeetingAgent object left its meeting (meet/agent.ts): it is no longer in the room, and the grace sweep is armed. */
   async meetingAgentLeft(meetingAgentId: string): Promise<void> {
     await this.scoped(() => agentLeft(meetingAgentId));
     await this.logging;
+    await this.armAlarm();
   }
 
   /**
-   * One headless turn of a hosted agent for its meeting Notes (services/meetingAgents.ts): the agent's runtime from the
-   * directory, then its Assistant object's meetingNotes, which gives back what the agent wrote.
+   * The agent's built-in "Meeting notes" automation (assistant/meetingWake.ts), made by its runtime if it has none and its
+   * sponsor has not deleted it: the agent's runtime from the directory, then its Assistant object.
    */
-  private async meetingNotesTurn(p: { organizationId: string; agentAccountId: string; askerUserId: string; askerAccountId: string | null; key: string; prompt: string }): Promise<string> {
-    if (!this.env.ASSISTANT) throw new Error('no Assistant binding');
+  private async ensureMeetingWake(p: { organizationId: string; agentAccountId: string }): Promise<void> {
+    if (!this.env.ASSISTANT) return;
     const answer = await this.directory().call('hostedRuntimeOf' as never, [p.agentAccountId] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
-    if (!answer.ok || !answer.value) throw new Error('the agent is not a hosted agent');
-    const runtime = answer.value;
-    return this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(runtime.runtimeKey)).meetingNotes({
-      organizationId: p.organizationId, runtime, key: p.key, prompt: p.prompt, askerUserId: p.askerUserId, askerAccountId: p.askerAccountId,
-    });
+    if (!answer.ok || !answer.value) return;
+    await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(answer.value.runtimeKey)).ensureMeetingWake({ organizationId: p.organizationId, runtime: answer.value });
   }
 
   /** Visitors not seen for 30 days lose access (V8), once a day while there are visitors. */

@@ -90,7 +90,7 @@ describe('the suite’s /mcp server', () => {
   it('lists Meet’s tools by meet:read and meet:write', async () => {
     const meet = { meet: async () => ({}) };
     expect(await names('meet:read', { meet })).toEqual(['list_live_meetings']);
-    expect((await names('meet:read meet:write', { meet })).sort()).toEqual(['create_meeting', 'list_live_meetings']);
+    expect((await names('meet:read meet:write', { meet })).sort()).toEqual(['create_meeting', 'list_live_meetings', 'save_meeting_notes']);
     expect(await names('meet:read meet:write', {})).toEqual([]);
   }, 60_000);
 });

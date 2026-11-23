@@ -323,6 +323,13 @@ export class EventsCore {
     return row ? this.withSchedule(row) : null;
   }
 
+  /** A new name or action (the owner's edit, subscriptions.ts `update`); the filter, consumer and cursor stay. */
+  updateSubscription(id: string, change: { name?: string; action?: SubscriptionAction }): SubscriptionDTO | null {
+    if (change.name !== undefined) this.sql.exec('UPDATE subscriptions SET name = ? WHERE id = ?', change.name, id);
+    if (change.action !== undefined) this.sql.exec('UPDATE subscriptions SET action = ? WHERE id = ?', JSON.stringify(change.action), id);
+    return this.getSubscription(id);
+  }
+
   /** The subscription, its schedule and its jobs. */
   deleteSubscription(id: string): boolean {
     return this.transact(() => {

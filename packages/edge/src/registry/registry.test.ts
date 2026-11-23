@@ -19,11 +19,11 @@ import { TOOL_DEFS } from '@flow/docs/server/agent/tools.ts';
 import { CLIENT_TOOLS } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_MAIL_TOOLS, MAIL_TOOLS } from '../imap/mailTools.ts';
 import { ASSISTANT_CALENDAR_TOOLS, CALENDAR_TOOLS } from '../calendar/calendarTools.ts';
-import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS as EVENT_TOOLS_ONLY, WAKE_TOOLS } from '../events/eventTools.ts';
+import { ALERT_TOOLS, ASSISTANT_EVENT_TOOLS, EVENT_TOOLS as EVENT_TOOLS_ONLY, SEARCH_TOOLS, WAKE_TOOLS } from '../events/eventTools.ts';
 
 // The event app's tools: the subscriptions' and an agent's wakes for itself (both at both doors where registered).
-const EVENT_TOOLS = [...EVENT_TOOLS_ONLY, ...WAKE_TOOLS, ...ALERT_TOOLS];
-const ASSISTANT_EVENTS: ReadonlySet<string> = new Set([...ASSISTANT_EVENT_TOOLS, ...WAKE_TOOLS.map((t) => t.name), ...ALERT_TOOLS.map((t) => t.name)]);
+const EVENT_TOOLS = [...EVENT_TOOLS_ONLY, ...WAKE_TOOLS, ...ALERT_TOOLS, ...SEARCH_TOOLS];
+const ASSISTANT_EVENTS: ReadonlySet<string> = new Set([...ASSISTANT_EVENT_TOOLS, ...WAKE_TOOLS.map((t) => t.name), ...ALERT_TOOLS.map((t) => t.name), ...SEARCH_TOOLS.map((t) => t.name)]);
 import { SCOPE_GROUPS } from '../directory/mcpOAuth.ts';
 import { toolLabel } from '@flow/docs/client/src/agent/describe.ts';
 import { BUILT_IN_TOOLS } from '../../../agent-bridge/src/mcp-server.ts';
@@ -104,7 +104,7 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
   for (const { name, description, input } of assistantTools) {
     // Chat's run in the Worker when a Chat turn pauses (assistant/chatTools.ts), as a page's browser tools run in its page.
     const kind = CLIENT_TOOLS.has(name) || ASSISTANT_CHAT_TOOLS.has(name) ? 'browser' : 'server';
-    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : ASSISTANT_EVENTS.has(name) ? 'events' : ASSISTANT_CHAT_TOOLS.has(name) ? 'chat' : 'docs';
+    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : ASSISTANT_EVENTS.has(name) ? 'events' : ASSISTANT_CHAT_TOOLS.has(name) ? 'chat' : meet.has(name) ? 'meet' : 'docs';
     rows.push({ door: 'assistant', def: { name, app, kind, doors: [], scopes: [], ...(CONFIRMED.has(name) ? { confirm: true } : {}), ...(RUNS_IN[name] ? { runsIn: RUNS_IN[name] } : {}), description, input } });
   }
   for (const t of BUILT_IN_TOOLS) {

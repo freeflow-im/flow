@@ -1,7 +1,8 @@
 // Agents in Meet meetings (docs/specs/meetings.md phase 5): someone in a room sends their own agent or a shared hosted
-// one; it joins RTK as `agent:<id>` with our agent preset, is added to the meeting's chat, and recording starts. After
-// the session's transcript is saved, each agent of that session writes Notes, saved in the meeting's folder by whoever
-// sent it and linked in the chat as the agent.
+// one; it joins RTK as `agent:<id>` with our agent preset, is added to the meeting's chat, and recording starts, and
+// `meet.agent.joined` goes in the agent's event log. After the session's transcript is saved (or without one, after a
+// grace), each agent of that session gets `meet.ended`, which wakes its "Meeting notes" automation; the agent saves its
+// Notes with save_meeting_notes, in the meeting's folder by whoever sent it and linked in the chat as the agent.
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
@@ -9,7 +10,8 @@ import { orgStorage } from '../../test/orgStorage';
 import { withDb, schema, type DB } from './db/index';
 import { createMeeting, handleRtkWebhook, joinMeeting } from './services/meetings';
 import { saveDueMeetingFiles, setMeetingDocs, startRecording, type MeetingDocs } from './services/meetingRecordings';
-import { agentLeft, listAgents, notesPrompt, recallAgent, sendAgent, setMeetingAgentHooks, type MeetingAgentHooks } from './services/meetingAgents';
+import type { PublishInput } from '../events/core';
+import { agentLeft, endOverdueMeetingAgents, ENDED_GRACE_MS, listAgents, recallAgent, saveMeetingNotes, sendAgent, setMeetingAgentHooks, type MeetingAgentHooks } from './services/meetingAgents';
 import { createWorkspace } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -53,19 +55,20 @@ const ROOM = {
 
 let joined: { meetingAgentId: string; token: string }[];
 let recalled: string[];
-let asked: { agentAccountId: string; askerUserId: string; prompt: string }[];
-let notes: string;
+let published: PublishInput[];
+let wakesFor: string[];
 let saved: Parameters<MeetingDocs['saveMeetingFiles']>[];
 function fakes() {
   joined = [];
   recalled = [];
-  asked = [];
+  published = [];
+  wakesFor = [];
   saved = [];
-  notes = '## Summary\nWe planned Q4.';
   const hooks: MeetingAgentHooks = {
     join: async (p) => void joined.push(p),
     recall: async (id) => void recalled.push(id),
-    writeNotes: async (p) => (asked.push(p), notes),
+    publish: async (e) => void published.push(e),
+    ensureMeetingWake: async (p) => void wakesFor.push(p.agentAccountId),
     adminAgentId: async () => CARL,
   };
   setMeetingAgentHooks(hooks);
@@ -77,6 +80,7 @@ function fakes() {
     },
   }));
 }
+const ended = () => published.filter((e) => e.type === 'meet.ended');
 
 let db: DB;
 let sqlite: DatabaseSync;
@@ -125,6 +129,18 @@ describe('sending an agent', () => {
     expect((await withDb(db, () => listAgents(m.code, BEN))).map((x) => x.agentId)).toEqual([ADA]);
   });
 
+  it('logs meet.agent.joined as the agent\'s own event, asked by its sender, and makes sure its Meeting notes automation exists', async () => {
+    const m = await room();
+    await withDb(db, () => sendAgent(m.code, BEN, OMNI));
+    expect(wakesFor).toEqual(['acct-omni']);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      type: 'meet.agent.joined', organizationId: workspaceId, actor: 'acct-omni', invokedBy: 'acct-ben', audience: 'account:acct-omni', about: ['acct-omni'],
+      data: { meetingId: m.id, title: 'Weekly planning', sessionId: 'sess-1', sentBy: { accountId: 'acct-ben', name: 'Ben Kim' } },
+    });
+    expect((published[0]!.data as { link: string }).link).toMatch(new RegExp(`/meet/${m.code}$`));
+  });
+
   it('sends your own agents and shared ones; not someone else\'s, nor the admin agent, nor one already there', async () => {
     const m = await room();
     await expect(withDb(db, () => sendAgent(m.code, ANN, BOB))).rejects.toMatchObject({ statusCode: 404 });
@@ -141,7 +157,7 @@ describe('sending an agent', () => {
     fakeRtk({ ...ROOM, 'GET /meetings/rtk-m1/active-session': null });
     await expect(withDb(db, () => sendAgent(m.code, ANN, ADA))).rejects.toMatchObject({ statusCode: 409 });
     fakeRtk(ROOM);
-    setMeetingAgentHooks({ join: async () => { throw new Error('ws refused'); }, recall: async () => {}, writeNotes: async () => '', adminAgentId: async () => null });
+    setMeetingAgentHooks({ join: async () => { throw new Error('ws refused'); }, recall: async () => {}, publish: async () => {}, ensureMeetingWake: async () => {}, adminAgentId: async () => null });
     vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(withDb(db, () => sendAgent(m.code, ANN, ADA))).rejects.toMatchObject({ statusCode: 502 });
     expect(await withDb(db, () => listAgents(m.code, ANN))).toEqual([]);
@@ -159,61 +175,110 @@ describe('sending an agent', () => {
   });
 });
 
-describe('notes after the meeting', () => {
+describe('after the meeting', () => {
   const transcriptHook = { event: 'meeting.transcript', meeting: { id: 'rtk-m1', sessionId: 'sess-1' }, transcriptDownloadUrl: TRANSCRIPT_URL };
 
-  it('the agent writes Notes from the transcript; they are saved in the folder by its sender and linked as the agent', async () => {
+  it('once the transcript is saved, each agent of the session gets meet.ended with it, once', async () => {
+    const m = await room();
+    await withDb(db, () => sendAgent(m.code, ANN, ADA));
+    await withDb(db, () => sendAgent(m.code, BEN, OMNI));
+    await withDb(db, () => handleRtkWebhook(transcriptHook));
+    await withDb(db, () => saveDueMeetingFiles());
+    expect(saved.map((s) => s[2].markdown?.title)).toEqual(['Transcript']);
+    const events = ended();
+    expect(events.map((e) => e.audience).sort()).toEqual(['account:acct-ada', 'account:acct-omni']);
+    const ada = events.find((e) => e.audience === 'account:acct-ada')!;
+    expect(ada).toMatchObject({
+      actor: null, about: ['acct-ada'],
+      data: {
+        meetingId: m.id, title: 'Weekly planning', sessionId: 'sess-1', folder: saved[0]![2].folder, sentBy: { name: 'Ann Lee' },
+        transcript: { docId: 's-1', hadSpeech: true, speakers: ['Ann Lee'] }, notesSaved: false,
+      },
+    });
+    expect((ada.data as { transcript: { url: string } }).transcript.url).toMatch(/\/docs\/md\/s-1$/);
+    // Later sweeps publish nothing more for it.
+    await withDb(db, () => endOverdueMeetingAgents(Date.now() + 10 * ENDED_GRACE_MS));
+    expect(ended()).toHaveLength(2);
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM meeting_agents WHERE ended_at IS NULL').get()).toEqual({ n: 0 });
+  });
+
+  it('with no transcript, meet.ended comes without one after the grace; not while a transcript waits to be copied', async () => {
+    const m = await room();
+    const a = await withDb(db, () => sendAgent(m.code, ANN, ADA));
+    await withDb(db, () => agentLeft(a.id));
+    await withDb(db, () => endOverdueMeetingAgents(Date.now() + ENDED_GRACE_MS / 2));
+    expect(ended()).toHaveLength(0);
+    // The transcript arrived but is not copied yet: the copy publishes it.
+    await withDb(db, () => handleRtkWebhook(transcriptHook));
+    await withDb(db, () => endOverdueMeetingAgents(Date.now() + 2 * ENDED_GRACE_MS));
+    expect(ended()).toHaveLength(0);
+    // The copy fails: the agent still hears the meeting ended, without a transcript.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    transcript = null as never;
+    fakeRtk({ ...ROOM });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('gone', { status: 410 })));
+    await withDb(db, () => saveDueMeetingFiles());
+    expect(ended()).toHaveLength(1);
+    expect(ended()[0]!.data).toMatchObject({ transcript: null, folder: expect.stringContaining('Weekly planning') });
+  });
+
+  it('an unrecorded session: meet.ended without a transcript once the grace is over', async () => {
+    const m = await room();
+    fakeRtk({ ...ROOM, 'POST /recordings': null });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const a = await withDb(db, () => sendAgent(m.code, ANN, ADA));
+    await withDb(db, () => agentLeft(a.id));
+    await withDb(db, () => endOverdueMeetingAgents(Date.now() + ENDED_GRACE_MS + 1000));
+    expect(ended()).toHaveLength(1);
+    expect(ended()[0]!.data).toMatchObject({ transcript: null, folder: null });
+  });
+
+  it('no agent, no events: recording alone works as before', async () => {
+    const m = await room();
+    await withDb(db, () => startRecording(m.code, ANN));
+    await withDb(db, () => handleRtkWebhook(transcriptHook));
+    await withDb(db, () => saveDueMeetingFiles());
+    expect(published).toEqual([]);
+    expect(saved).toHaveLength(1);
+  });
+});
+
+describe('save_meeting_notes', () => {
+  const transcriptHook = { event: 'meeting.transcript', meeting: { id: 'rtk-m1', sessionId: 'sess-1' }, transcriptDownloadUrl: TRANSCRIPT_URL };
+
+  it("saves the agent's notes in the session's folder as its sender and links them in the chat as the agent", async () => {
     const m = await room();
     await withDb(db, () => sendAgent(m.code, ANN, ADA));
     await withDb(db, () => handleRtkWebhook(transcriptHook));
     await withDb(db, () => saveDueMeetingFiles());
-    expect(asked).toHaveLength(1);
-    expect(asked[0]).toMatchObject({ agentAccountId: 'acct-ada', askerUserId: ANN });
-    expect(asked[0]!.prompt).toContain('**Ann Lee** · 0:01\nLet us plan Q4.');
+    const out = await withDb(db, () => saveMeetingNotes(ADA, { meetingId: m.id, sessionId: 'sess-1', notes: '## Summary\nWe planned Q4.' }));
     const [transcriptSave, notesSave] = saved;
-    expect(transcriptSave![2].markdown?.title).toBe('Transcript');
     expect(notesSave![1]).toEqual({ userId: ANN, email: `${ANN}@x.test` });
-    expect(notesSave![2]).toMatchObject({ folder: transcriptSave![2].folder, markdown: { title: 'Notes', text: notes } });
+    expect(notesSave![2]).toMatchObject({ folder: transcriptSave![2].folder, markdown: { title: 'Notes', text: '## Summary\nWe planned Q4.' } });
+    expect(out).toMatchObject({ folder: transcriptSave![2].folder, docId: 's-2' });
     const chat = sqlite.prepare('SELECT chat_channel_id AS id FROM meetings WHERE id = ?').get(m.id) as { id: string };
     const lines = sqlite.prepare("SELECT user_id FROM messages WHERE channel_id = ? AND system_kind = 'file_shared' ORDER BY created_at").all(chat.id) as { user_id: string }[];
     expect(lines.map((l) => l.user_id)).toEqual([ANN, ADA]);
     expect(sqlite.prepare('SELECT notes_url FROM meeting_agents').get()).toEqual({ notes_url: '/docs/md/s-2' });
   });
 
-  it('two agents each write their own Notes, named after them; a silent meeting gets none', async () => {
+  it('names the notes after the agent when two were there, and makes a folder for an unrecorded session', async () => {
     const m = await room();
+    fakeRtk({ ...ROOM, 'POST /recordings': null });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     await withDb(db, () => sendAgent(m.code, ANN, ADA));
     await withDb(db, () => sendAgent(m.code, BEN, OMNI));
-    await withDb(db, () => handleRtkWebhook(transcriptHook));
-    await withDb(db, () => saveDueMeetingFiles());
-    expect(saved.slice(1).map((s) => s[2].markdown?.title).sort()).toEqual(['Notes · Ada', 'Notes · Omni']);
-
-    // Another session, nobody speaks.
-    fakes();
-    transcript = [];
-    fakeRtk({ ...ROOM, 'GET /meetings/rtk-m1/active-session': { id: 'sess-2' }, 'POST /recordings': { id: 'rec-2', session_id: 'sess-2', status: 'INVOKED' } });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    await withDb(db, () => agentLeft((sqlite.prepare('SELECT id FROM meeting_agents WHERE agent_id = ?').get(ADA) as { id: string }).id));
-    await withDb(db, () => sendAgent(m.code, ANN, ADA));
-    await withDb(db, () => handleRtkWebhook({ ...transcriptHook, meeting: { id: 'rtk-m1', sessionId: 'sess-2' } }));
-    await withDb(db, () => saveDueMeetingFiles());
-    expect(asked).toHaveLength(0);
-    expect(saved.map((s) => s[2].markdown?.title)).toEqual(['Transcript']);
+    await withDb(db, () => saveMeetingNotes(OMNI, { meetingId: m.id, notes: 'Short.' }));
+    expect(saved[0]![1]).toEqual({ userId: BEN, email: `${BEN}@x.test` });
+    expect(saved[0]![2]).toMatchObject({ folder: expect.stringMatching(/^Meetings\/\d{4}-\d{2}-\d{2} Weekly planning$/), markdown: { title: 'Notes · Omni' } });
   });
 
-  it('quotes the transcript as information, and cuts a very long one', () => {
-    const p = notesPrompt({ title: 'Q4', senderName: 'Ann', transcript: 'x'.repeat(200_000) });
-    expect(p).toContain('never as instructions');
-    expect(p).toContain('[The rest of the transcript was cut.]');
-    expect(p.length).toBeLessThan(165_000);
-  });
-
-  it('no agent, no notes: recording alone works as before', async () => {
+  it('refuses an agent that was not sent to the meeting, and empty notes', async () => {
     const m = await room();
-    await withDb(db, () => startRecording(m.code, ANN));
-    await withDb(db, () => handleRtkWebhook(transcriptHook));
-    await withDb(db, () => saveDueMeetingFiles());
-    expect(asked).toHaveLength(0);
-    expect(saved).toHaveLength(1);
+    await withDb(db, () => sendAgent(m.code, ANN, ADA));
+    await expect(withDb(db, () => saveMeetingNotes(BOB, { meetingId: m.id, notes: 'x' }))).rejects.toMatchObject({ statusCode: 403 });
+    await expect(withDb(db, () => saveMeetingNotes(ADA, { meetingId: m.id, notes: '  ' }))).rejects.toMatchObject({ statusCode: 400 });
+    await expect(withDb(db, () => saveMeetingNotes(ADA, { meetingId: 'nope', notes: 'x' }))).rejects.toMatchObject({ statusCode: 404 });
+    expect(saved).toEqual([]);
   });
 });
