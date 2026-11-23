@@ -132,7 +132,8 @@ Still open (proposed):
 
 - **The meeting's folder** (R9): `Meetings/<date> <title>/` in Organization files, made when recording first starts
   in a session. It holds `Recording.mp4` (everyone's video and audio in one file) and `Transcript` (a Markdown doc:
-  speaker, time, words), and in phase 5 the agent's `Notes`. Files stay until someone deletes them.
+  speaker, time, words). Files stay until someone deletes them. (An agent's `Notes` go to the My files of whoever
+  sent it, §1.6, since task 32.)
   A second recording in one session goes in the same folder (`Recording 2.mp4`); another session with the same date
   and title gets its own folder (`… (2)`). RTK's transcript covers the whole session (R7a). Its JSON times are clock seconds, not the documented offsets.
   Every member of the organization can open every meeting's folder, private huddles included. The person who pressed
@@ -153,10 +154,19 @@ Still open (proposed):
   cannot be sent yet: they do not see meeting chats.
 - An agent can **turn recording on itself** (R10). RTK agents have no meeting controls, so the agent asks our server,
   which starts it with the REST API; everyone sees the same badge.
-- At the end the agent reads the transcript and writes **Notes** (a summary and action items, as a Markdown doc) into
-  the meeting's folder, and links them in the meeting's chat. The server gives the agent's model the transcript in one
-  headless turn and saves what it writes (`Notes`, or `Notes · <name>` when two agents were there), owned by whoever
-  sent it. A session where nobody spoke gets no notes.
+- What the agent did is an **event** (Taskboard task 32, decision_log 2026-11-22 "Agents remember through the event
+  log"): `meet.agent_joined` when it is sent (actor the agent, `invokedBy` its sender), and `meet.ended` once the session
+  is over: when its transcript is saved (or could not be), or at RTK's `meeting.ended` when nobody recorded it. One
+  `meet.ended` per agent that attended, addressed to the agent; its data has the meeting, who came, what became of the
+  transcript (`saved`, `silent`, `failed`, `not_recorded`) and the transcript's and recording's addresses. The agent
+  finds them later with `search_events`, from any conversation.
+- At the end the agent's **Meeting notes** automation runs: an ordinary automation on its own `meet.ended`, made the
+  first time it is sent (owned by its sponsor, else by whoever first sent it), which people see in Automations and can
+  edit or delete (deleted, it is not made again). It tells the agent to read the transcript (`read_meeting_transcript`),
+  write **Notes** (a summary, decisions, action items, open questions) and save them in the **My files of whoever sent
+  it**, under `Meetings/<date> <title>/` (`save_meeting_notes`; `Notes · <name>` when they sent two agents), alert that
+  person, and in every case, transcript or not, write a short entry in its own memory. A shared agent's job runs for its
+  sender (their `you/` memory folder, their alert). This replaced phase 5's headless Notes turn.
 - RTK agents cannot hear, see or speak (capability matrix, 2026-11-22: audio and video "No (Planned)"); they work from
   the transcript.
 - **Deleted (R6)**: talking to an agent by voice in a DM huddle (the bridge's LiveKit voice session). The iOS
@@ -343,8 +353,10 @@ id `agent:<user id>`, and starts a **MeetingAgent** DO per sending (`meeting_age
 Participant WebSocket (`participant` subscription only), pings every 20 s from an alarm, and leaves (close 1000) when
 RTK's session has no person left, on `session.ended`, when sent away, or after 4 h (a connected agent keeps the session
 alive and is billed). Chat is the Flow meeting channel, so the agent's replies go through the normal Chat @mention
-path, not RTK chat. Notes: `meetingRecordings.saveTranscript` → `meetingAgents.writeAgentNotes` → Org
-`meetingNotesTurn` → Assistant `meetingNotes`.
+path, not RTK chat. After (task 32): `meetingRecordings.saveTranscript` (or `meetings.handleRtkWebhook` for an
+unrecorded session) → `meetingAgents.reportMeetingEnded` publishes `meet.ended` → the Events object wakes the agent's
+Meeting notes automation (`meet/notesAutomation.ts`) → its tools `read_meeting_transcript` and `save_meeting_notes` call
+the Org object (`agentMeetingTranscript`, `saveAgentMeetingNotes`).
 
 ### 5.5 Huddle details
 
@@ -467,8 +479,8 @@ RTK file retention (7 days).
      opening one from a mention shows the channel.
 4. **Recording** (R8, R9) — a Record button for anyone in the meeting, badge for all, recording and transcript into
    `Meetings/<date> <title>/` in Organization files, links in the meeting's chat, meeting page in "Past".
-5. **Agents** (R10) — MeetingAgent DO, note takers, an agent turns recording on, the agent writes `Notes` into the
-   meeting's folder; bridge events and tools.
+5. **Agents** (R10) — MeetingAgent DO, note takers, an agent turns recording on, the agent writes `Notes` (since task
+   32: by its Meeting notes automation, into its sender's My files); bridge events and tools.
 6. **Native** — iOS RTK; macOS Meet window; then step 3 of §7 (remove LiveKit for good).
 
 Later: breakout rooms (connected meetings); webinars (stage); livestream;

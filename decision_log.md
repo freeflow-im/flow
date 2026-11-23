@@ -1,5 +1,21 @@
 # Decision log
 
+## 2026-11-22 — Agents remember through the event log; meeting notes become a built-in automation (Taskboard task 32)
+
+- **Decision (agreed with Scott):** everything an agent does or experiences is an event, and the event log is the shared
+  record an agent searches; its memory files stay its own to manage. `search_events` shows the agent its own events and
+  those of the person who started the turn, never another person's. A shared agent sees what it did for this person, and
+  what it did for no one only where this person may see it. Meet publishes `meet.agent_joined` and `meet.ended` (one per
+  agent that attended, addressed to it). A built-in **Meeting notes** automation on `meet.ended` replaces phase 5's
+  headless Notes turn: notes go to the sender's My files, and the agent writes a memory entry even with no transcript.
+- **Why:** Ada was sent to a meeting and later had no memory of it. Each turn is its own conversation, the join was no
+  turn at all, and the Notes turn wrote nothing the agent could find again.
+- **Also:** an automation is made the first time an agent is sent, owned by its sponsor (else its first sender), and is
+  not made again once deleted. Automations can now be edited (name and instruction: `PATCH /v1/events/subscriptions/:id`).
+  A shared agent's own events can wake its own wake automation (`consumerOwn`); personal agents keep the sponsor-only rule.
+- **Where:** `packages/edge/src/events/history.ts`, `org/services/meetingAgents.ts`, `meet/notesAutomation.ts`;
+  `docs/specs/meetings.md` §1.6.
+
 ## 2026-11-22 — The suite runs hosted apps' OAuth sign-ins; drafts reach approved hosts (Taskboard task 30)
 
 - **Decision:** a hosted app declares the services it signs people in to (`"oauth"` in its manifest), and the suite does
