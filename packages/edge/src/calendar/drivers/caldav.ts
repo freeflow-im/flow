@@ -309,9 +309,12 @@ export class CalDav implements Driver {
 }
 
 function refused(res: Response, body: string): ApiError {
+  // The server's own words, for the logs: the toast says only the status (Google's 400 body is an empty DAV:error).
+  console.warn(`[calendar] refused ${res.status}${res.url ? ` at ${new URL(res.url).host}` : ''}: ${body.replace(/\s+/g, ' ').trim().slice(0, 300) || '(no body)'}`);
   if (res.status === 403) return calendarError(400, 'bad_request', 'The calendar server does not allow that change (the calendar may be read-only)');
   if (res.status === 409 || /no-uid-conflict/i.test(body)) return calendarError(409, 'conflict', 'The calendar server already has that event');
   if (res.status === 413) return calendarError(400, 'bad_request', 'The event is too large for the calendar server');
+  if (res.status === 400) return calendarError(502, 'refused', 'The calendar server refused the change (400)');
   return calendarError(502, 'server_error', `The calendar server refused the change (${res.status})`);
 }
 

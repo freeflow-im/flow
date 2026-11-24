@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { guestsOf, itipReply, itipRequest, newEvent, organizerOf, parseInvitation, parseObject, respondTo, sequenceOf, storedInvitation } from './ical';
+import { ApiError } from '../errors';
 import type { CalendarMail } from './imip';
 import { Invites, isCalendarPart, type InviteCalendars, type InviteMail } from './invites';
 import { CalendarStore, type Sql } from './store';
@@ -122,7 +123,7 @@ function memory(): Sql {
 }
 
 /** A person with one calendar on a server that does (Google) or does not (Radicale) schedule, and one mail account. */
-function setup(opts: { schedules?: boolean; parts?: Record<string, string>; mailAddress?: string; failSend?: boolean } = {}) {
+function setup(opts: { schedules?: boolean; parts?: Record<string, string>; mailAddress?: string; failSend?: boolean; refuseNew?: boolean; onSync?: (store: CalendarStore) => void } = {}) {
   const sql = memory();
   const store = new CalendarStore(sql);
   store.init();
@@ -135,7 +136,11 @@ function setup(opts: { schedules?: boolean; parts?: Record<string, string>; mail
     me: () => new Set(me),
     schedules: () => !!opts.schedules,
     calendars: () => store.calendars().map((c) => ({ id: c.id, name: c.name, color: '#3b82f6', isDefault: !!c.is_default, role: c.role })),
-    put: async (calendarId, href, raw) => { writes.push(`PUT ${href}`); store.putObject(calendarId, href, `"${writes.length}"`, raw, { me, zone: 'UTC' }); },
+    put: async (calendarId, href, raw, etag) => {
+      if (opts.refuseNew && etag === null) throw new ApiError(502, 'refused', 'The calendar server refused the change (400)');
+      writes.push(`PUT ${href}`); store.putObject(calendarId, href, `"${writes.length}"`, raw, { me, zone: 'UTC' });
+    },
+    sync: async () => { writes.push('SYNC'); opts.onSync?.(store); },
     remove: async (calendarId, href) => { writes.push(`DELETE ${href}`); store.deleteObject(calendarId, href); },
     hrefFor: (_c, uid) => `https://dav.example.com/cal/${encodeURIComponent(uid)}.ics`,
     now: () => NOW,
@@ -194,6 +199,36 @@ describe('the invite routes', () => {
     expect(a).toMatchObject({ replied: 'server', onCalendar: { myResponse: 'declined' } });
     expect(store.objectByUid('cal', GOOGLE_UID)!.href).toBe('https://dav.example.com/cal/google.ics');
     expect(sent).toHaveLength(0);
+  });
+
+  it('an invitation Google holds (a 400 for its UID, nothing after a sync) is answered by email and said to be held', async () => {
+    const { invites, sent, writes } = setup({ schedules: true, refuseNew: true, parts: { 'INBOX/1/0': fixture('invite-outlook-request.ics') } });
+    const a = await invites.respond(body(1, { response: 'accepted' }));
+    expect((a as { replyError?: string }).replyError).toBeUndefined();
+    expect(a).toMatchObject({ held: true, replied: 'email', onCalendar: null });
+    expect(writes).toEqual(['SYNC']);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.mail.method).toBe('REPLY');
+    expect(sent[0]!.mail.ics.replace(/\r\n /g, '')).toMatch(/PARTSTAT=ACCEPTED[^\r\n]*mailto:scott@example\.com/i);
+    // Outlook's zone name ("Pacific Standard Time") is not an IANA one: the subject falls back instead of failing the email.
+    expect(sent[0]!.mail.subject).toMatch(/^Accepted: /);
+  });
+
+  it('a 400 for a new invitation that a sync then finds on the calendar answers that copy, the server telling the organizer', async () => {
+    const theirs = fixture('invite-google-request.ics').replace('METHOD:REQUEST\r\n', '');
+    const { invites, store, sent, writes } = setup({ schedules: true, refuseNew: true, parts: { 'INBOX/1/0': fixture('invite-google-request.ics') }, onSync: (s) => s.putObject('cal', 'https://dav.example.com/cal/google.ics', '"g"', theirs, { me: ME, zone: 'UTC' }) });
+    const a = await invites.respond(body(1, { response: 'accepted' }));
+    expect(a).toMatchObject({ replied: 'server', onCalendar: { myResponse: 'accepted' } });
+    expect(a).not.toHaveProperty('held');
+    expect(writes).toEqual(['SYNC', 'PUT https://dav.example.com/cal/google.ics']);
+    expect(store.objectByUid('cal', GOOGLE_UID)!.href).toBe('https://dav.example.com/cal/google.ics');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('other failures to put the event still fail the answer', async () => {
+    const { invites } = setup({ parts: { 'INBOX/1/0': fixture('invite-google-request.ics') } });
+    (invites as unknown as { cal: InviteCalendars }).cal.put = async () => { throw new ApiError(409, 'conflict', 'The calendar server already has that event'); };
+    await expect(invites.respond(body(1, { response: 'accepted' }))).rejects.toThrow(/already has/);
   });
 
   it('a failed email does not undo the answer; the answer says so', async () => {

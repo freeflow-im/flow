@@ -37,13 +37,17 @@ const dayText = (d: Date, zone: string) => new Intl.DateTimeFormat('en-US', { we
  * When an event is, for a message's subject and text: "Thursday, November 5, 2026 · 12 – 1pm (America/New_York)", the half
  * of the day once when both times share it; "Thursday, November 5, 2026" for a day; two days for one that spans them.
  */
-export function whenText(start: number, end: number, allDay: boolean, zone: string | null): string {
+/** Whether the runtime knows a zone by this name (Outlook's "Eastern Standard Time" is not an IANA name). */
+const knownZone = (z: string) => { try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch { return false; } };
+
+/** `fallback`: the zone used when the event's is not one the runtime knows (the calendar's, else UTC). */
+export function whenText(start: number, end: number, allDay: boolean, zone: string | null, fallback = 'UTC'): string {
   if (allDay) {
     const last = end - 86_400_000;
     const first = dayText(new Date(start), 'UTC');
     return last > start ? `${first} – ${dayText(new Date(last), 'UTC')}` : first;
   }
-  const z = zone && zone !== 'UTC' ? zone : 'UTC';
+  const z = zone && zone !== 'UTC' && knownZone(zone) ? zone : knownZone(fallback) ? fallback : 'UTC';
   const s = new Date(start), e = new Date(end);
   const a = clock(s, z), b = clock(e, z);
   const sameDay = dayText(s, z) === dayText(e, z);
