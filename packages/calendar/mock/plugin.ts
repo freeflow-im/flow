@@ -1,6 +1,7 @@
 // A dev-only stand-in for the edge Worker's /v1/calendar API (and the few suite routes the page reads), so the client
 // runs with no server: `pnpm --filter @flow/calendar dev:mock`. State is in memory and resets on restart.
-// CALENDAR_MOCK=empty starts with no account (the "Connect your calendar" page). Google's sign-in is skipped: Start
+// CALENDAR_MOCK=empty starts with no account (the "Connect your calendar" page); CALENDAR_MOCK=stale-google adds a Google
+// account that has stopped letting FreeFlow in (the suite bar's Reconnect card, which Start then fixes). Google's sign-in is skipped: Start
 // connects a Google account at once (denied@gmail.com comes back with ?error=access_denied). Adding a CalDAV account: the password "wrong"
 // answers auth_failed, a server address containing "bad" answers connect_failed, and "stale" connects an account whose
 // password then stops working (the re-enter banner). Repeating events are expanded here simply (daily, weekly on days,
@@ -100,8 +101,9 @@ function fields(e: MockEvent, p: EventPatch | EventInput): void {
   if (p.timezone !== undefined) e.timezone = p.timezone ?? null;
 }
 
-export function createMockApi(empty = false) {
+export function createMockApi(empty = false, staleGoogle = false) {
   const state: MockState = empty ? { accounts: [], calendars: [], events: [] } : sampleState();
+  if (staleGoogle) state.accounts.push({ id: 'google-stale', kind: 'google', email: 'ann@gmail.com', displayName: 'Ann (Google)', server: { url: 'https://apidata.googleusercontent.com/caldav/v2/ann%40gmail.com/user', username: 'ann@gmail.com' }, status: 'auth_failed' });
   const cal = (id: string) => { const c = state.calendars.find((x) => x.id === id); if (!c) throw new HttpError(404, 'not_found', 'no such calendar'); return c; };
   const writable = (c: CalendarInfo) => { if (c.role === 'reader') throw new HttpError(400, 'bad_request', 'This calendar is read-only'); return c; };
   const target = (id: string) => {
@@ -277,7 +279,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 export function calendarMock(): Plugin {
-  const api = createMockApi(process.env.CALENDAR_MOCK === 'empty');
+  const api = createMockApi(process.env.CALENDAR_MOCK === 'empty', process.env.CALENDAR_MOCK === 'stale-google');
   const scheduler = createSchedulerMock();
   const handle = async (method: string, url: URL, body: unknown) => scheduler(method, url, body) ?? api(method, url, body);
   return {

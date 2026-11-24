@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The reconnect-calendar label is web and desktop only (2026-11-24, Taskboard task 38).** It is drawn by the suite bar, so macOS and iOS do not show it; their calendars sync through the same server, which stops at `auth_failed` (gap to close: a native banner).
 - **Editing an automation is in web Admin only (2026-11-23, Taskboard task 32).** The Edit button is in Admin › Automations, which macOS and iOS do not have (deliberate, as for the rest of Admin); the PATCH route serves any client.
 - **Sending an agent to a meeting is on web and desktop only (2026-11-23, Meet phase 5, Taskboard task 29).** "Send an agent" is in the Meet room's People panel, which macOS and iOS open in the browser; the agent's Notes are ordinary Docs files and its chat lines reach every client. Bridge (external) agents cannot be sent yet: they do not see meeting chats (gap to close).
 - **Recording a meeting is on web and desktop only (2026-11-22, Meet phase 4, Taskboard task 28).** The Record button and badge are in the Meet room, which macOS and iOS open in the browser; the saved video and transcript are ordinary Docs files and the chat line reaches every client (closes with Meet phase 6, native call screens).

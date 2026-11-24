@@ -8,6 +8,7 @@ import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import { SuiteAlerts, useClosedAlerts, useMeetingAlerts, type SuiteAlert } from './alerts';
 import { useServerAlerts } from './serverAlerts';
+import { ReconnectLabels, useReconnectNotices } from './calendarAlerts';
 import { useAlertNotifications, useDesktopOff, useDesktopPermission } from './desktopNotify';
 import { Scratchpad } from './Scratchpad';
 import './suite-bar.css';
@@ -275,6 +276,10 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const activeOrganization = organization?.entries.find((e) => e.active)?.id ?? null;
   const meetings = useMeetingAlerts(meetingAlerts === false ? null : activeOrganization, closedAlerts);
   const [fromServer, closeOnServer] = useServerAlerts(activeOrganization);
+  // A connected calendar that stopped letting FreeFlow in: a short label under the bar, with Reconnect (task 38).
+  // Not on Calendar's own page, which has its own banner for this.
+  const onCalendar = tabs.find((t) => t.active)?.id === 'calendar';
+  const reconnects = useReconnectNotices(meetingAlerts === false || onCalendar ? null : activeOrganization, closedAlerts);
   const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings, ...fromServer];
   const closeAlert = (id: string) => { if (!closeOnServer(id)) closeLocally(id); };
   // …and each meeting alert as a desktop notification too, once across tabs (task 15); permission is asked from a click.
@@ -704,6 +709,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
           )}
         </div>
       </div>
+      <ReconnectLabels notices={reconnects} onClose={closeLocally} />
       <SuiteAlerts alerts={shownAlerts} onClose={closeAlert} onTurnOnDesktop={desktopPermission === 'default' && meetings.length ? turnOnDesktop : undefined} />
     </header>
   );
