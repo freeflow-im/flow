@@ -1,6 +1,6 @@
 # A label under the suite bar asks to reconnect a calendar
 
-- `[web]` `[desktop]` When a connected calendar's sync is refused (`auth_failed`), a short amber label slides down under the suite bar on every page; for Google its Reconnect button goes straight to Google's consent page and back to the same page. A CalDAV account's Fix opens Calendar.
+- `[web]` `[desktop]` When a connected calendar's sync is refused (`auth_failed`), a short amber label slides down under the suite bar on every page but Calendar's own (which has its banner); for Google its Reconnect button goes straight to Google's consent page and back to the same page. A CalDAV account's Fix opens Calendar.
 - `[web]` Calendar's sidebar says "Reconnect needed" for a Google account, not "Password needed".
 
 ## Feature

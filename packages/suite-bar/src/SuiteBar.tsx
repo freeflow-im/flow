@@ -277,7 +277,9 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const meetings = useMeetingAlerts(meetingAlerts === false ? null : activeOrganization, closedAlerts);
   const [fromServer, closeOnServer] = useServerAlerts(activeOrganization);
   // A connected calendar that stopped letting FreeFlow in: a short label under the bar, with Reconnect (task 38).
-  const reconnects = useReconnectNotices(meetingAlerts === false ? null : activeOrganization, closedAlerts);
+  // Not on Calendar's own page, which has its own banner for this.
+  const onCalendar = tabs.find((t) => t.active)?.id === 'calendar';
+  const reconnects = useReconnectNotices(meetingAlerts === false || onCalendar ? null : activeOrganization, closedAlerts);
   const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings, ...fromServer];
   const closeAlert = (id: string) => { if (!closeOnServer(id)) closeLocally(id); };
   // …and each meeting alert as a desktop notification too, once across tabs (task 15); permission is asked from a click.

@@ -61,6 +61,15 @@ describe('the reconnect label under the suite bar', () => {
     expect(screen.queryByTestId('calendar-reconnect')).toBeNull();
   });
 
+  it('shows nothing on Calendar’s own page, which has its own banner', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { asked.push(url); return new Response(JSON.stringify({ accounts: [acct()] }), { status: 200 }); }));
+    render(<SuiteBar tabs={[{ id: 'calendar', label: 'Calendar', href: '/calendar/', active: true, onSelect() {} }]} organization={organization} account={account} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(asked.some((u) => u.startsWith('/v1/calendar/accounts'))).toBe(false);
+    expect(screen.queryByTestId('calendar-reconnect')).toBeNull();
+  });
+
   it('closes on ×, for a day, in every tab', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ accounts: [acct()] }), { status: 200 })));
     render(<SuiteBar tabs={[]} organization={organization} account={account} />);
