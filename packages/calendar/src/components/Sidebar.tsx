@@ -51,7 +51,7 @@ export function Sidebar(p: SidebarProps) {
           <section key={a.id} className="mt-3 px-2">
             <h2 className="flex items-center justify-between px-2 py-1 text-[12px] font-medium uppercase tracking-[.06em] text-muted">
               {a.kind === 'native' ? <span className="min-w-0 truncate" title={a.email}>{a.displayName || a.email}</span> : <button type="button" className="min-w-0 truncate text-left hover:text-ink" title={a.email} onClick={() => p.onAccount(a.id)}>{a.displayName || a.email}</button>}
-              {a.status !== 'ok' && <span className="ml-2 shrink-0 rounded bg-warn-bg px-1.5 text-[11px] normal-case tracking-normal text-ink">{a.status === 'auth_failed' ? 'Password needed' : 'Not reachable'}</span>}
+              {a.status !== 'ok' && <span className="ml-2 shrink-0 rounded bg-warn-bg px-1.5 text-[11px] normal-case tracking-normal text-ink">{a.status === 'auth_failed' ? (a.kind === 'google' ? 'Reconnect needed' : 'Password needed') : 'Not reachable'}</span>}
             </h2>
             <ul>
               {cals.map((c) => <CalendarRow key={c.id} c={c} p={p} native={a.kind === 'native'} />)}
