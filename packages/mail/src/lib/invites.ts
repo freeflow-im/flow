@@ -34,6 +34,12 @@ export const replyLine = (reply: NonNullable<InviteAnswer['reply']>) => `${nameO
 /** The toast after answering: what the person said, and whether the organizer was told. */
 export function answeredText(response: Exclude<InviteResponse, 'needs-action'>, r: Replied, organizer: string): string {
   const said = response === 'accepted' ? "You're going." : response === 'declined' ? 'You declined.' : 'You said maybe.';
+  if (r.held) {
+    const added = ' Your calendar would not add the event: if Gmail shows "Add to calendar" on this message, choose it there.';
+    if (r.replied === 'email') return `${said} ${organizer} was emailed your answer.${added}`;
+    if (r.replied === 'failed') return `${said} ${organizer} could not be told: ${r.replyError}${added}`;
+    return `${said}${added}`;
+  }
   if (r.replied === 'email') return `${said} ${organizer} was emailed your answer.`;
   if (r.replied === 'failed') return `${said} It is on your calendar, but ${organizer} could not be told: ${r.replyError}`;
   return said;

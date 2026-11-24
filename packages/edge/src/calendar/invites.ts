@@ -14,6 +14,7 @@
 import { deleteFromEvent, guestsOf, isoOf, itipReply, itipRequest, organizerOf, parseInvitation, parseObject, respondTo, ridText, sequenceOf, storedInvitation, type Attendee, type EventData, type Invitation, type ParsedEvent, type Response, type WriteContext } from './ical';
 import { cancelMail, replyMail, requestMail, whenText, type CalendarMail } from './imip';
 import { InviteBody, InviteRespondBody, badRequest, calendarError, messageOf, notFound, parse } from './rules';
+import { ApiError } from '../errors';
 import type { CalendarRow, CalendarStore, ObjectRow } from './store';
 
 export interface MailIdentity { id: string; email: string; displayName: string }
@@ -34,6 +35,8 @@ export interface InviteCalendars {
   put(calendarId: string, href: string, raw: string, etag: string | null): Promise<void>;
   remove(calendarId: string, href: string, etag: string | null): Promise<void>;
   hrefFor(calendarId: string, uid: string): string;
+  /** Reads a calendar from its server again (an invitation the server may have put there since the last sync). */
+  sync?(calendarId: string): Promise<void>;
   now(): number;
   /**
    * A REPLY to an event the person organizes on a native calendar, applied there (the replier's PARTSTAT, itip.ts): true
@@ -63,7 +66,12 @@ export interface InviteAnswer {
   calendars: { id: string; name: string; color: string; isDefault: boolean }[];
 }
 /** How an answer reached the organizer: the server's own scheduling, an email, nothing to send (no organizer, or the person's own), or an email that failed. */
-export type Replied = { replied: 'server' | 'email' | 'none' } | { replied: 'failed'; replyError: string };
+export type Replied = ({ replied: 'server' | 'email' | 'none' } | { replied: 'failed'; replyError: string }) & {
+  /** The calendar server refused the event (Google holds an invitation from a new sender until "Add to calendar" in Gmail): not on a calendar; the organizer was emailed. */
+  held?: true;
+};
+/** A refusal of the event itself (caldav.ts `refused`, a 400), not a conflict, a read-only calendar or a server down. */
+const isRefusal = (err: unknown) => err instanceof ApiError && err.code === 'refused';
 /** An organizer's messages to the guests (iMIP): sent, or not (no mail account with the calendar's address, or it failed) and why. */
 export interface Notified { invitationsSent: boolean; invitationsNote?: string }
 
@@ -80,7 +88,7 @@ function inviteEvent(p: ParsedEvent): InviteEvent {
     ...(p.rid ? { recurrenceId: ridText(p.rid, d.allDay) } : {}), ...(d.conference ? { conference: d.conference } : {}), sequence: d.sequence,
   };
 }
-const whenOf = (p: ParsedEvent) => whenText(p.startUtc, p.endUtc, p.data.allDay, p.data.timezone);
+const whenOf = (p: ParsedEvent, fallback?: string | null) => whenText(p.startUtc, p.endUtc, p.data.allDay, p.data.timezone, fallback ?? undefined);
 /** An object's event as a row (its master, else its first), for the text of a message about it. */
 const mainRow = (raw: string, uid: string): ParsedEvent | null => {
   const rows = parseObject(raw, { me: new Set(), zone: 'UTC' }).filter((r) => r.uid === uid);
@@ -168,30 +176,52 @@ export class Invites {
     const fallback = { email: identity.email, name: identity.displayName };
     const found = this.find(inv.uid);
     let calendarId: string, written: string;
-    if (found && found.calendar.role !== 'reader') {
-      calendarId = found.calendar.id;
-      const base = found.obj.raw;
-      if (!this.cal.schedules(calendarId) && inv.sequence > sequenceOf(base, inv.uid)) written = storedInvitation(text, inv.uid, b.response, { me: meList, fallback, now });
-      else {
-        const ctx: WriteContext = { me: meList, organizer: null, displayName: identity.displayName, zone: found.calendar.timezone ?? 'UTC', now };
-        try {
-          written = respondTo(base, inv.uid, inv.main.rid, b.response, undefined, ctx);
-        } catch {
-          // The copy on the calendar does not list the person (invited by a list's address): they are added with the answer.
-          written = storedInvitation(base, inv.uid, b.response, { me: meList, fallback, now });
-        }
-      }
-      await this.cal.put(calendarId, found.obj.href, written, found.obj.etag);
-    } else {
+    if (found && found.calendar.role !== 'reader') ({ calendarId, written } = await this.answerCopy(found, loaded, b.response, now));
+    else {
       const writable = this.cal.calendars().filter((c) => c.role !== 'reader');
       const target = b.calendarId ? writable.find((c) => c.id === b.calendarId) : (writable.find((c) => c.isDefault) ?? writable[0]);
       if (!target) throw b.calendarId ? badRequest('calendarId: not a calendar you can write to') : badRequest('connect a calendar first');
       calendarId = target.id;
       written = storedInvitation(text, inv.uid, b.response, { me: meList, fallback, now });
-      await this.cal.put(calendarId, this.cal.hrefFor(calendarId, inv.uid), written, null);
+      try {
+        await this.cal.put(calendarId, this.cal.hrefFor(calendarId, inv.uid), written, null);
+      } catch (err) {
+        if (!isRefusal(err)) throw err;
+        // Google holds an invitation from a sender the person has not dealt with until "Add to calendar" in Gmail, hidden
+        // from CalDAV and the Calendar API alike, and refuses any copy with its UID (tested 2026-11-23). A sync finds it
+        // if it was put on the calendar since; else the organizer is emailed the answer and the event waits on the server.
+        await this.cal.sync?.(calendarId).catch(() => {});
+        const since = this.find(inv.uid);
+        if (!since || since.calendar.role === 'reader') {
+          const replied = await this.reply(calendarId, identity, written, inv.uid, inv.main.rid, b.response, me, true);
+          return { ...this.answer(loaded), ...replied, held: true };
+        }
+        ({ calendarId, written } = await this.answerCopy(since, loaded, b.response, now));
+      }
     }
     const replied = await this.reply(calendarId, identity, written, inv.uid, inv.main.rid, b.response, me);
     return { ...this.answer(loaded), ...replied };
+  }
+
+  /** The answer written on the person's copy already on a calendar (a newer invitation, by SEQUENCE, replaces it first where the server does not schedule). */
+  private async answerCopy(found: { calendar: CalendarRow; obj: ObjectRow }, { inv, text, identity, me }: Loaded, response: Exclude<Response, 'needs-action'>, now: number): Promise<{ calendarId: string; written: string }> {
+    const calendarId = found.calendar.id;
+    const base = found.obj.raw;
+    const meList = [...me];
+    const fallback = { email: identity.email, name: identity.displayName };
+    let written: string;
+    if (!this.cal.schedules(calendarId) && inv.sequence > sequenceOf(base, inv.uid)) written = storedInvitation(text, inv.uid, response, { me: meList, fallback, now });
+    else {
+      const ctx: WriteContext = { me: meList, organizer: null, displayName: identity.displayName, zone: found.calendar.timezone ?? 'UTC', now };
+      try {
+        written = respondTo(base, inv.uid, inv.main.rid, response, undefined, ctx);
+      } catch {
+        // The copy on the calendar does not list the person (invited by a list's address): they are added with the answer.
+        written = storedInvitation(base, inv.uid, response, { me: meList, fallback, now });
+      }
+    }
+    await this.cal.put(calendarId, found.obj.href, written, found.obj.etag);
+    return { calendarId, written };
   }
 
   /** `POST /v1/calendar/invites/cancel`: a cancelled event (or the one occurrence a cancellation names) taken off the calendar it is on. */
@@ -215,9 +245,12 @@ export class Invites {
     return ids.find((i) => me.has(i.email.toLowerCase())) ?? null;
   }
 
-  /** Tells the organizer an answer by email, unless the server schedules, there is nobody to tell, or the organizer is the person. */
-  private async reply(calendarId: string, identity: MailIdentity | null, written: string, uid: string, rid: number, response: Exclude<Response, 'needs-action'>, me: Set<string>): Promise<Replied> {
-    if (this.cal.schedules(calendarId)) return { replied: 'server' };
+  /**
+   * Tells the organizer an answer by email, unless the server schedules (and has the event: `byEmail` when it does not),
+   * there is nobody to tell, or the organizer is the person.
+   */
+  private async reply(calendarId: string, identity: MailIdentity | null, written: string, uid: string, rid: number, response: Exclude<Response, 'needs-action'>, me: Set<string>, byEmail = false): Promise<Replied> {
+    if (!byEmail && this.cal.schedules(calendarId)) return { replied: 'server' };
     const organizer = organizerOf(written, uid);
     if (!organizer || me.has(organizer)) return { replied: 'none' };
     const from = identity ?? (await this.sender(me));
@@ -227,7 +260,7 @@ export class Invites {
     const organizerRow = main?.data.organizer;
     try {
       const ics = itipReply(written, uid, rid, { me: [...me], now: this.cal.now() });
-      await this.mail.send(from.id, replyMail({ me: { name: from.displayName, email: from.email }, organizer: { name: organizerRow?.name ?? null, email: organizer }, response, summary: main?.data.summary ?? '', when: row ? whenOf(row) : '', ics }));
+      await this.mail.send(from.id, replyMail({ me: { name: from.displayName, email: from.email }, organizer: { name: organizerRow?.name ?? null, email: organizer }, response, summary: main?.data.summary ?? '', when: row ? whenOf(row, this.cal.store.calendars().find((c) => c.id === calendarId)?.timezone) : '', ics }));
       return { replied: 'email' };
     } catch (err) {
       return { replied: 'failed', replyError: (err as Error).message.slice(0, 300) };

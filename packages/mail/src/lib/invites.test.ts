@@ -33,6 +33,11 @@ describe('the card\'s words', () => {
     expect(answeredText('declined', { replied: 'server' }, 'Ann Lee')).toBe('You declined.');
     expect(answeredText('tentative', { replied: 'failed', replyError: 'SMTP is down' }, 'Ann')).toBe('You said maybe. It is on your calendar, but Ann could not be told: SMTP is down');
   });
+
+  it('an event the calendar server held: the organizer emailed, and where to add it', () => {
+    expect(answeredText('accepted', { replied: 'email', held: true }, 'Shaun')).toBe(`You're going. Shaun was emailed your answer. Your calendar would not add the event: if Gmail shows "Add to calendar" on this message, choose it there.`);
+    expect(answeredText('declined', { replied: 'failed', replyError: 'SMTP is down', held: true }, 'Shaun')).toMatch(/^You declined\. Shaun could not be told: SMTP is down Your calendar would not add/);
+  });
 });
 
 describe('Create event from a thread', () => {

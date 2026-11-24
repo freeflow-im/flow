@@ -343,7 +343,10 @@ export interface InviteAnswer {
   calendars: { id: string; name: string; color: string; isDefault: boolean }[];
 }
 /** How the answer reached the organizer: their server's own way, an email from this account, nothing to tell, or an email that failed. */
-export type Replied = { replied: 'server' | 'email' | 'none' } | { replied: 'failed'; replyError: string };
+export type Replied = ({ replied: 'server' | 'email' | 'none' } | { replied: 'failed'; replyError: string }) & {
+  /** The calendar server would not take the event (Google holds an invitation from a new sender until "Add to calendar" in Gmail). */
+  held?: true;
+};
 /** A message's invitation part, as the Calendar API names it. */
 export interface InviteRef { account: string; folder: string; uid: number; part: number }
 

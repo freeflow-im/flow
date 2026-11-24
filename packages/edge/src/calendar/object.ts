@@ -731,6 +731,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
         this.syncSoon(c.id);
       },
       hrefFor: (calendarId, uid) => this.hrefIn(this.calendar(calendarId), uid),
+      sync: (calendarId) => this.syncCalendar(calendarId),
       now: () => Date.now(),
       applyReply: async (ics, replier) => {
         try {
