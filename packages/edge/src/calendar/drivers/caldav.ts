@@ -67,6 +67,8 @@ export interface CalDavOptions {
 
 const MULTIGET_BATCH = 50;
 const MAX_REDIRECTS = 5;
+/** The pages of one cut-short sync-collection answer read in one sync; the next sync goes on from the last token. */
+const MAX_SYNC_PAGES = 10;
 const ETAG_PROPS = { 'd:getetag': {} };
 
 const xmlText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -229,22 +231,39 @@ export class CalDav implements Driver {
   }
 
   async changes(href: string, token: string): Promise<Changes | null> {
-    const res = await syncCollection({ url: href, props: ETAG_PROPS, syncLevel: 1, syncToken: token, fetch: this.request });
-    // A token the server no longer knows: 403 or 409 (valid-sync-token), or 400 on some servers; the caller lists all.
-    if (res.length === 1 && res[0].ok === false && [400, 403, 409, 410, 412, 507].includes(res[0].status ?? 0)) return null;
-    if (res.some((r) => r.ok === false && !r.href?.endsWith('.ics') && (r.status ?? 0) >= 400 && (r.status ?? 0) !== 404)) throw connectFailed(`The calendar server refused the sync (${res[0].status})`);
-    const out: Changes = { changed: [], deleted: [], token: null };
-    for (const r of res) {
-      const next = textOf((r.raw as { multistatus?: { syncToken?: unknown } } | undefined)?.multistatus?.syncToken);
-      if (next) out.token = next;
-      if (!r.href) continue;
-      const abs = absolute(r.href, href);
-      if (abs.replace(/\/$/, '') === href.replace(/\/$/, '')) continue;
-      const etag = textOf(r.props?.getetag);
-      if (etag && r.status !== 404) out.changed.push({ href: abs, etag });
-      else out.deleted.push(abs);
+    const self = href.replace(/\/$/, '');
+    const changed = new Map<string, string>();
+    const deleted = new Set<string>();
+    let at = token;
+    for (let page = 0; page < MAX_SYNC_PAGES; page++) {
+      const res = await syncCollection({ url: href, props: ETAG_PROPS, syncLevel: 1, syncToken: at, fetch: this.request });
+      // A token the server no longer knows: 403 or 409 (valid-sync-token), or 400 on some servers; the caller lists all.
+      if (res.length === 1 && res[0].ok === false && [400, 403, 409, 410, 412, 507].includes(res[0].status ?? 0)) return null;
+      let next: string | null = null, more = false;
+      for (const r of res) {
+        next = textOf((r.raw as { multistatus?: { syncToken?: unknown } } | undefined)?.multistatus?.syncToken) ?? next;
+        if (!r.href) continue;
+        const abs = absolute(r.href, href);
+        if (abs.replace(/\/$/, '') === self) {
+          // The collection itself with 507: the answer is cut short (RFC 6578 §3.6), and the rest comes from its token.
+          if (r.status === 507) more = true;
+          else if (r.ok === false && r.status !== 404) return null;
+          continue;
+        }
+        // An entry refused for another reason than "gone" (this failed a shared Google calendar every minute as "refused
+        // the sync (207)", 2026-11-25): the delta cannot be trusted, so the caller lists all.
+        if (r.ok === false && r.status !== 404 && !abs.endsWith('.ics')) return null;
+        const etag = textOf(r.props?.getetag);
+        if (etag && r.status !== 404) { changed.set(abs, etag); deleted.delete(abs); }
+        else { deleted.add(abs); changed.delete(abs); }
+      }
+      // Cut short with no new token to go on from: only a full listing can finish it.
+      if (more && (!next || next === at)) return null;
+      if (next) at = next;
+      if (!more) break;
     }
-    return out;
+    // Still cut short after MAX_SYNC_PAGES: what was read is kept with its token, and the next sync goes on from there.
+    return { changed: [...changed].map(([h, etag]) => ({ href: h, etag })), deleted: [...deleted], token: at === token ? null : at };
   }
 
   /**

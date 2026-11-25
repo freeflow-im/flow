@@ -337,6 +337,10 @@ export class CalendarStore {
     this.sql.exec('INSERT INTO sync_runs (calendar_id, at, ms, mode, changed, deleted, error) VALUES (?, ?, ?, ?, ?, ?, ?)', run.calendarId, run.at, run.ms, run.mode, run.changed, run.deleted, run.error);
     this.sql.exec('DELETE FROM sync_runs WHERE id <= (SELECT id FROM sync_runs ORDER BY id DESC LIMIT 1 OFFSET ?)', SYNC_RUNS_KEEP);
   }
+  /** True when another calendar of the account synced without an error since `since`: the server is reachable. */
+  anotherSyncedSince(accountId: string, calendarId: string, since: number): boolean {
+    return this.sql.exec('SELECT 1 FROM sync_runs r JOIN calendars c ON c.id = r.calendar_id WHERE c.account_id = ? AND r.calendar_id != ? AND r.error IS NULL AND r.at >= ? LIMIT 1', accountId, calendarId, since).toArray().length > 0;
+  }
   syncRuns(limit = 50): SyncRun[] {
     return this.sql.exec<{ calendar_id: string; at: number; ms: number; mode: string; changed: number; deleted: number; error: string | null }>(
       'SELECT calendar_id, at, ms, mode, changed, deleted, error FROM sync_runs ORDER BY id DESC LIMIT ?', limit).toArray()

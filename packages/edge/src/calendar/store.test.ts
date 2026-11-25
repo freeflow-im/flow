@@ -267,3 +267,22 @@ describe('native calendars (phase 4.1): the store is the server', () => {
     expect(list()).toHaveLength(5);
   });
 });
+
+describe('the sync log', () => {
+  it('says whether another calendar of the account synced without an error lately', () => {
+    const sql = memory();
+    const store = new CalendarStore(sql);
+    store.init();
+    calendarRow(sql, 'a');
+    calendarRow(sql, 'b');
+    sql.exec(`INSERT INTO calendars (id, account_id, href, name, created_at) VALUES ('other', 'acct2', 'https://dav.example.com/other/', 'other', 0)`);
+    const run = (calendarId: string, at: number, error: string | null) => store.logSync({ calendarId, at, ms: 1, mode: 'delta', changed: 0, deleted: 0, error });
+    run('a', 1_000, null);
+    run('other', 5_000, null);
+    run('b', 5_000, 'refused');
+    // Its own run, another account's, a failed one and an old one do not count.
+    expect(store.anotherSyncedSince('acct', 'a', 0)).toBe(false);
+    expect(store.anotherSyncedSince('acct', 'b', 2_000)).toBe(false);
+    expect(store.anotherSyncedSince('acct', 'b', 500)).toBe(true);
+  });
+});

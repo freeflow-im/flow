@@ -92,6 +92,37 @@ describe('the CalDAV driver, against a fake server', () => {
     expect(await d.changes(cal, 'old')).toBeNull();
   });
 
+  it('reads on through a delta the server cut short (507 on the collection), and lists all when an entry is refused', async () => {
+    const cal = 'https://dav.example.com/ann/work/';
+    const cut = '<d:response><d:href>/ann/work/</d:href><d:status>HTTP/1.1 507 Insufficient Storage</d:status></d:response>';
+    const pages: Record<string, string> = {
+      t1: response('/ann/work/e1.ics', '<d:getetag>"1"</d:getetag>') + response('/ann/work/e2.ics', '<d:getetag>"1"</d:getetag>') + cut + '<d:sync-token>t2</d:sync-token>',
+      t2: response('/ann/work/e1.ics', '<d:getetag>"2"</d:getetag>') + '<d:response><d:href>/ann/work/e2.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response><d:sync-token>t3</d:sync-token>',
+      stuck: response('/ann/work/e1.ics', '<d:getetag>"1"</d:getetag>') + cut + '<d:sync-token>stuck</d:sync-token>',
+      refused: response('/ann/work/e1.ics', '<d:getetag>"1"</d:getetag>') + '<d:response><d:href>/ann/work/</d:href><d:status>HTTP/1.1 403 Forbidden</d:status></d:response><d:sync-token>t9</d:sync-token>',
+      endless: cut,
+    };
+    let n = 0;
+    const { fetchFn, seen } = fakeServer({
+      'REPORT /ann/work/': ({ body }) => {
+        const token = /<[^>]*sync-token[^>]*>([^<]+)</.exec(body)?.[1] ?? '';
+        if (token.startsWith('endless')) return xml(response(`/ann/work/p${n}.ics`, '<d:getetag>"1"</d:getetag>') + cut + `<d:sync-token>endless${++n}</d:sync-token>`);
+        return xml(pages[token]);
+      },
+    });
+    const d = client(fetchFn);
+    // Two pages: the later page wins for an event in both.
+    expect(await d.changes(cal, 't1')).toEqual({ changed: [{ href: 'https://dav.example.com/ann/work/e1.ics', etag: '"2"' }], deleted: ['https://dav.example.com/ann/work/e2.ics'], token: 't3' });
+    expect(seen.map((r) => /<[^>]*sync-token[^>]*>([^<]+)</.exec(r.body)?.[1])).toEqual(['t1', 't2']);
+    // Cut short with the same token again, or the collection refused: a full listing.
+    expect(await d.changes(cal, 'stuck')).toBeNull();
+    expect(await d.changes(cal, 'refused')).toBeNull();
+    // Never finishing: ten pages are kept with the last token, for the next sync to go on from.
+    const part = await d.changes(cal, 'endless');
+    expect(part?.changed).toHaveLength(10);
+    expect(part?.token).toBe('endless10');
+  });
+
   it('lists the etags of the VEVENTs (the ctag fallback), without the collection itself', async () => {
     const { fetchFn, seen } = fakeServer({ 'REPORT /ann/work/': () => xml(response('/ann/work/', '<d:getetag>"c"</d:getetag>') + response('/ann/work/a.ics', '<d:getetag>"1"</d:getetag>') + response('/ann/work/b%20c.ics', '<d:getetag>"2"</d:getetag>')) });
     expect(await client(fetchFn).etags('https://dav.example.com/ann/work/')).toEqual([{ href: 'https://dav.example.com/ann/work/a.ics', etag: '"1"' }, { href: 'https://dav.example.com/ann/work/b%20c.ics', etag: '"2"' }]);
