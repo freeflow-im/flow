@@ -2,13 +2,19 @@
 // "Global Scratchpad" whiteboard (at the top of Docs' My files, made on first use) in a popup over the page, to jot a
 // note or drop a picture without leaving it. The popup is Docs' /docs/scratchpad page in a frame (Docs'
 // pages/ScratchpadPage.tsx); it moves by its title bar and resizes from its corner, and remembers both in this browser.
-// The frame is made the first time it opens and kept, hidden, while closed, so it opens again at once and nothing
-// typed is lost to a close.
+// The frame is loaded, hidden, once the page around it has settled (PRELOAD_MS, then an idle moment), so the first
+// click opens on a board that is already there; it is kept while closed, so it opens again at once and nothing typed
+// is lost to a close. Loaded ahead of a click (?preload) the page only finds the scratchpad; a user who has none yet
+// gets one when the popup first opens, which the bar tells the frame (SCRATCHPAD_OPENED).
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import './scratchpad.css';
 
 export const SCRATCHPAD_PATH = '/docs/scratchpad';
+/** Posted to the frame each time the popup opens (Docs' pages/ScratchpadPage.tsx). */
+export const SCRATCHPAD_OPENED = 'flow.scratchpad.opened';
+/** How long after the page loads the hidden frame starts loading, out of the way of the page's own first requests. */
+export const PRELOAD_MS = 2500;
 const KEY = 'flow.scratchpad';
 const MIN_W = 360;
 const MIN_H = 260;
@@ -64,10 +70,22 @@ export const ScratchpadIcon = () => (
 /** The bar's button and the popup it opens. */
 export function Scratchpad() {
   const [open, setOpen] = useState(false);
-  // Made on the first open, then kept.
-  const [made, setMade] = useState(false);
+  // The frame's address, once it is made: ahead of a click (preloaded), or by the first click; then kept.
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let idle: number | undefined;
+    const timer = window.setTimeout(() => {
+      const preload = () => setSrc((s) => s ?? `${SCRATCHPAD_PATH}?preload`);
+      if (typeof window.requestIdleCallback === 'function') idle = window.requestIdleCallback(preload, { timeout: 3000 });
+      else preload();
+    }, PRELOAD_MS);
+    return () => {
+      window.clearTimeout(timer);
+      if (idle !== undefined) window.cancelIdleCallback?.(idle);
+    };
+  }, []);
   const toggle = () => {
-    setMade(true);
+    setSrc((s) => s ?? SCRATCHPAD_PATH);
     setOpen((o) => !o);
   };
   return (
@@ -75,17 +93,25 @@ export function Scratchpad() {
       <button type="button" className="sb-icon-btn sb-scratchpad" aria-label="Scratchpad" aria-pressed={open} title="Scratchpad" data-testid="suite-scratchpad" onClick={toggle}>
         <ScratchpadIcon />
       </button>
-      {made && createPortal(<ScratchpadPopup open={open} onClose={() => setOpen(false)} />, document.body)}
+      {src && createPortal(<ScratchpadPopup src={src} open={open} onClose={() => setOpen(false)} />, document.body)}
     </>
   );
 }
 
-function ScratchpadPopup({ open, onClose }: { open: boolean; onClose(): void }) {
+function ScratchpadPopup({ src, open, onClose }: { src: string; open: boolean; onClose(): void }) {
   const [rect, setRect] = useState(readRect);
   const frame = useRef<HTMLIFrameElement>(null);
-  // Opened, the keyboard goes to the board (a ⌘V picture lands there at once).
+  // Opened, the keyboard goes to the board (a ⌘V picture lands there at once), and a preloaded page that found no
+  // scratchpad makes it now. A page still loading listens once it has loaded, so it is told again then.
   useEffect(() => {
-    if (open) frame.current?.contentWindow?.focus();
+    if (!open) return;
+    const win = frame.current?.contentWindow;
+    win?.focus();
+    const tell = () => frame.current?.contentWindow?.postMessage(SCRATCHPAD_OPENED, window.location.origin);
+    tell();
+    const el = frame.current;
+    el?.addEventListener('load', tell);
+    return () => el?.removeEventListener('load', tell);
   }, [open]);
   // While dragging or resizing, a sheet over the frame keeps the pointer's moves in this page.
   const [moving, setMoving] = useState(false);
@@ -146,7 +172,7 @@ function ScratchpadPopup({ open, onClose }: { open: boolean; onClose(): void }) 
           </svg>
         </button>
       </div>
-      <iframe ref={frame} className="sb-scratchpad-frame" title="Global Scratchpad" src={SCRATCHPAD_PATH} />
+      <iframe ref={frame} className="sb-scratchpad-frame" title="Global Scratchpad" src={src} />
       {moving && <div className="sb-scratchpad-sheet" />}
       <div className="sb-scratchpad-grip" aria-hidden="true" onPointerDown={down('size')} onPointerMove={move} onPointerUp={up} onPointerCancel={up} />
     </div>

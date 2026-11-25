@@ -671,11 +671,20 @@ describe('whiteboards', () => {
   it('opens the global scratchpad: made once at the top of My files, then the same board; a renamed one is left alone', async () => {
     const { cookie } = await signUp(app, box, 'pad@x.com');
     const { cookie: other } = await signUp(app, box, 'pad2@x.com');
-    let res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
+    // Looked for ahead of a click (make: false), it is not made.
+    let res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie }, payload: { make: false } });
+    expect(res.json()).toEqual({ board: null, content: null });
+    expect((await app.inject({ method: 'GET', url: '/api/whiteboards', headers: { cookie } })).json().boards).toEqual([]);
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
     expect(res.statusCode).toBe(200);
     const pad = res.json().board;
     expect(pad).toMatchObject({ title: 'Global Scratchpad', kind: 'whiteboard' });
     expect(pad.folder).toBeUndefined();
+    // It comes with its content, so the popup needs no second request.
+    const board = res.json().content;
+    expect(board).toEqual((await app.inject({ method: 'GET', url: `/api/whiteboards/${pad.id}`, headers: { cookie } })).json().board);
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie }, payload: { make: false } });
+    expect(res.json()).toMatchObject({ board: { id: pad.id }, content: board });
     res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
     expect(res.json().board.id).toBe(pad.id);
     // Each user has their own.

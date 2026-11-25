@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { defaultRect, fitRect, SCRATCHPAD_PATH } from './Scratchpad';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defaultRect, fitRect, PRELOAD_MS, SCRATCHPAD_OPENED, SCRATCHPAD_PATH } from './Scratchpad';
 import { SuiteBar } from './SuiteBar';
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   window.localStorage.clear();
 });
@@ -39,6 +40,23 @@ describe('scratchpad', () => {
     expect(popup.hidden).toBe(false);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(popup.hidden).toBe(true);
+  });
+
+  it('loads the frame, hidden, once the page has settled, and tells it when the popup opens', () => {
+    vi.useFakeTimers();
+    bar();
+    expect(screen.queryByTestId('suite-scratchpad-popup')).toBeNull();
+    act(() => vi.advanceTimersByTime(PRELOAD_MS + 3000));
+    const popup = screen.getByTestId('suite-scratchpad-popup');
+    expect(popup.hidden).toBe(true);
+    const frame = popup.querySelector('iframe')!;
+    expect(frame.getAttribute('src')).toBe(`${SCRATCHPAD_PATH}?preload`);
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    fireEvent.click(screen.getByTestId('suite-scratchpad'));
+    expect(popup.hidden).toBe(false);
+    expect(post).toHaveBeenCalledWith(SCRATCHPAD_OPENED, window.location.origin);
+    // The same frame: nothing loads again.
+    expect(frame.getAttribute('src')).toBe(`${SCRATCHPAD_PATH}?preload`);
   });
 
   it('can be left out', () => {

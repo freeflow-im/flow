@@ -1278,10 +1278,16 @@ export async function buildApp(opts: AppOptions) {
     // The global scratchpad (suite bar's scratchpad button): the whiteboard named SCRATCHPAD_TITLE at the top of the
     // user's own files (My files, in the organization the request names), made on first use. Found by its name, so a
     // renamed or moved one is just a board, and the next open makes a fresh scratchpad.
+    // It answers with the board's content too, so the popup opens in one round trip. With `make: false` (the suite
+    // bar's frame loading ahead of a click) it only finds: a user who never opens the scratchpad gets no file.
     r.post('/api/whiteboards/scratchpad', async (req) => {
       const mine: ScopeArg = typeof req.scope === 'string' ? req.scope : { ...req.scope, private: true };
+      const make = (req.body as { make?: unknown } | undefined)?.make !== false;
       const found = sheets.list(mine, 'whiteboard').find((b) => !b.folder && b.title === SCRATCHPAD_TITLE);
-      return { board: found ?? (await sheets.createWhiteboard(mine, SCRATCHPAD_TITLE, newWhiteboard(), '')) };
+      if (!found && !make) return { board: null, content: null };
+      const board = found ?? (await sheets.createWhiteboard(mine, SCRATCHPAD_TITLE, newWhiteboard(), ''));
+      const loaded = await sheets.loadWhiteboard(req.viewer, board.id);
+      return { board: loaded?.meta ?? board, content: loaded?.board ?? null };
     });
 
     r.get('/api/whiteboards/:id', async (req, reply) => {
