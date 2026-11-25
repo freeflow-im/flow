@@ -423,7 +423,13 @@ export async function buildApp(opts: AppOptions) {
         },
       })
     : null;
-  const agent = assistantSettings && new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
+  // An organization's folder is its maker's to delete (server/access.ts), as DELETE /api/folders checks: for delete_folder.
+  const mayRemoveFolder = (viewer: ViewerArg, scope: ScopeArg, path: string): boolean => {
+    if (!(folders instanceof FolderStore) || !path) return true;
+    const role = access(db, viewer, 'folder', folderObjectId(scopeKey(scope), path));
+    return !!role && atLeast(role, 'owner');
+  };
+  const agent = assistantSettings && new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent, folders: { store: folders, mayRemove: mayRemoveFolder } });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.

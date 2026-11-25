@@ -182,6 +182,16 @@ export function toolLabel(name: string, i: Input): string {
       return typeof i.query === 'string' && i.query ? `Searched your files for “${i.query}”` : 'Listed your files';
     case 'read_stored_file':
       return 'Read a file';
+    case 'list_folder':
+      return typeof i.folder === 'string' && i.folder ? `Looked in the folder “${i.folder}”` : 'Looked through your folders';
+    case 'create_folder':
+      return `Created the folder “${String(i.path ?? '')}”`;
+    case 'move_file': {
+      const n = Array.isArray(i.ids) ? i.ids.length : 0;
+      return typeof i.folder === 'string' && i.folder ? `Moved ${plural(n, 'file')} to “${i.folder}”` : `Moved ${plural(n, 'file')} to the top folder`;
+    }
+    case 'delete_folder':
+      return `Deleted the folder “${String(i.path ?? '')}”`;
     case 'list_docs':
       return typeof i.query === 'string' && i.query ? `Searched your documents for “${i.query}”` : 'Listed your documents';
     case 'create_doc':

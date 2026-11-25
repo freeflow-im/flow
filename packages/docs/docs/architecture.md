@@ -391,6 +391,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
   `GET /api/folders/download?folder=` is a folder as a zip (`exportFolder` in `server/export.ts`), and a file
   dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`).
+  The assistant's folder tools (`list_folder`, `create_folder`, `move_file`, `delete_folder`; `runFolderTool` in
+  `server/agent/tools.ts`) call the stores in-process, and in the suite the same routes over HTTP (edge `assistant/docsTools.ts`).
 - The thumbnail view (`FileLibrary`'s `view`, `FileThumb.tsx`): pictures show themselves, videos a frame, PDFs their first
   page (pdf.js, with Range requests for only the parts that page needs), and documents, spreadsheets and presentations a
   small rendering of their start (`GET /api/library/preview/:id`, `shared/preview.ts`). A card loads nothing until it

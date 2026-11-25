@@ -25,7 +25,9 @@ import { PrintError, type PdfMaker } from '../pdf.ts';
 import { isTextFileType, STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { fetchPublicFile, WebFetchError } from '../webFetch.ts';
-import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
+import { inScope, scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
+import { cleanFolderPath, MAX_FOLDER_DEPTH } from '../../shared/folders.ts';
+import type { Folders } from '../folders.ts';
 import { contentSearchLimit, contentSearchQuery, contentSearchResult, SEARCH_CONTENT_DESCRIPTION, toSearchHit } from '../search.ts';
 
 const tab = z.string().optional().describe('Tab name. Defaults to the active tab.');
@@ -723,6 +725,22 @@ export const schemas = {
   read_other_doc: z
     .object({ doc_id: z.string(), from: blockNumber.optional(), to: blockNumber.optional() })
     .describe('Read another text or Markdown document in the account without opening it, as numbered Markdown blocks. Not for the open document; use read_doc for that.'),
+  // Folders of the library (shared/folders.ts), named by their paths ("Reports/2026"; '' is the top).
+  list_folder: z
+    .object({ folder: z.string().max(1000).optional().describe('The folder\'s path, such as "Reports/2026". Leave out for the top of the library.') })
+    .describe("What is in one folder of the user's library: the folders in it (by path), its documents, presentations and spreadsheets (id, kind, title) and its stored files (id, filename, type). Use it to see how files are organized before creating folders or moving files."),
+  create_folder: z
+    .object({ path: z.string().min(1).max(1000).describe('The path of the new folder: names separated by "/", such as "Invoices" or "Invoices/2026".') })
+    .describe("Create a folder in the user's library. Folders above it that are missing are created too. Nothing changes if it already exists (created is false)."),
+  move_file: z
+    .object({
+      ids: z.array(z.string()).min(1).max(100).describe('The documents, presentations, spreadsheets or stored files to move, by id (list_folder, find_files, list_docs and the like give ids).'),
+      folder: z.string().max(1000).describe('The path of the folder to put them in, such as "Invoices/2026". It must exist (create_folder makes it). An empty string is the top of the library.'),
+    })
+    .describe('Move files into a folder: documents, presentations, spreadsheets and stored files, many in one call. Returns which moved and which could not, and why.'),
+  delete_folder: z
+    .object({ path: z.string().min(1).max(1000).describe('The path of the folder, such as "Old/Drafts".') })
+    .describe('Delete an empty folder. A folder that still has files or folders in it is not deleted: move what is in it elsewhere first (list_folder shows it). Only when the user asks for folders to be removed.'),
 
   // --- Connectors: external data sources such as Brex ---
   list_connections: z
@@ -864,6 +882,8 @@ export interface ServerToolEnv extends ServerToolEnvExtensions {
   files?: FileStore;
   /** Makes PDFs of files (server/pdf.ts); without it export_pdf is not available. */
   pdf?: PdfMaker;
+  /** The library's folders, for list_folder, create_folder, move_file and delete_folder; without them those are not available. */
+  folders?: FolderTools;
   context: AgentContext;
   /**
    * How web_search and image_search search: the user's Brave Search API key (Settings), else the server's
@@ -871,6 +891,38 @@ export interface ServerToolEnv extends ServerToolEnvExtensions {
    */
   search?: { braveKey?: string | null; provider?: ProviderSearch | null };
 }
+
+/** What the folder tools use in this process: the library's folders, and whether the viewer may delete one (an organization's is its maker's). */
+export interface FolderTools {
+  store: Folders;
+  mayRemove?(viewer: ViewerArg, scope: ScopeArg, path: string): boolean;
+}
+
+/** A folder path a folder tool was given, tidied ('' is the top), or a failure the model can correct. */
+export function folderPathOf(input: unknown, topAllowed = true): string {
+  const path = cleanFolderPath(typeof input === 'string' ? input.trim().replace(/^\/+|\/+$/g, '') : input);
+  if (path === null) throw new ToolFailure(`"${String(input)}" is not a folder path: folder names separated by "/", none empty or with \\ : * ? " < > |, at most ${MAX_FOLDER_DEPTH} deep.`);
+  if (!path && !topAllowed) throw new ToolFailure('Give the folder\'s path; the top of the library is not a folder.');
+  return path;
+}
+
+/** list_folder's answer, as the in-process tool and the suite's over HTTP give it. */
+export function folderListing(folder: string, folders: string[], docs: { id: string; kind: string; title: string }[], files: { id: string; filename: string; type: string }[]): string {
+  return JSON.stringify({
+    folder,
+    folders,
+    docs: docs.map((d) => ({ id: d.id, kind: d.kind, title: d.title })),
+    files: files.map((f) => ({ id: f.id, filename: f.filename, type: f.type })),
+    ...(folders.length || docs.length || files.length ? {} : { note: folder ? 'This folder is empty.' : 'The library is empty.' }),
+  });
+}
+
+/** move_file's answer: what moved, and what did not with why. */
+export const moveResult = (folder: string, moved: string[], failed: { id: string; error: string }[]): string =>
+  JSON.stringify({ folder, moved, ...(failed.length ? { failed } : {}) });
+
+export const noFolder = (path: string, hint: string): ToolFailure => new ToolFailure(`There is no folder "${path}". ${hint}`);
+export const NOT_IN_ROOT = 'It is in another part of the library (My files or Organization files) than this folder.';
 
 /** Run an account tool. Returns the result text for Claude; throws ToolFailure for errors Claude should see. */
 export function runServerTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
@@ -972,6 +1024,11 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
       if (!md) throw new ToolFailure(`No document with id "${id}". Use list_docs to find ids.`);
       return JSON.stringify({ title: md.meta.title, format: 'markdown', ...markdownOutline(md.doc.text, range) });
     }
+    case 'list_folder':
+    case 'create_folder':
+    case 'move_file':
+    case 'delete_folder':
+      return runFolderTool(name, input, env);
     case 'list_connections': {
       const svc = connectorService(env);
       const connections = svc.list(env.userId).map((c) => ({
@@ -1125,6 +1182,59 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
 }
 
 export class ToolFailure extends Error {}
+
+/** The folder tools in this process (the suite runs them over HTTP: edge assistant/docsTools.ts). */
+async function runFolderTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
+  const f = env.folders;
+  if (!f) throw new ToolFailure('Folders cannot be changed here.');
+  const scope = env.scope ?? env.userId;
+  const viewer = env.viewer ?? env.userId;
+  switch (name) {
+    case 'list_folder': {
+      const folder = folderPathOf(input.folder);
+      if (!f.store.exists(scope, folder)) throw noFolder(folder, 'list_folder with no folder shows the top of the library.');
+      const problem = f.store.problem?.(scope, folder);
+      if (problem) throw new ToolFailure(problem);
+      return folderListing(folder, f.store.children(scope, folder), env.sheets.listIn(scope, folder), env.files?.listIn(scope, folder) ?? []);
+    }
+    case 'create_folder': {
+      const path = folderPathOf(input.path, false);
+      return JSON.stringify({ folder: path, created: f.store.create(scope, path) });
+    }
+    case 'move_file': {
+      const folder = folderPathOf(input.folder);
+      if (!f.store.exists(scope, folder)) throw noFolder(folder, 'Create it with create_folder first.');
+      const moved: string[] = [];
+      const failed: { id: string; error: string }[] = [];
+      for (const id of [...new Set(input.ids as string[])]) {
+        const doc = env.sheets.find(id);
+        const row = doc ?? env.files?.find(id);
+        if (!row) {
+          failed.push({ id, error: 'There is no file with this id.' });
+          continue;
+        }
+        if (!inScope(row, scope)) {
+          failed.push({ id, error: NOT_IN_ROOT });
+          continue;
+        }
+        const done = doc ? env.sheets.move(viewer, id, folder) : env.files!.move(viewer, id, folder);
+        if (done) moved.push(id);
+        else failed.push({ id, error: 'There is no file with this id that you may move.' });
+      }
+      return moveResult(folder, moved, failed);
+    }
+    case 'delete_folder': {
+      const path = folderPathOf(input.path, false);
+      if (!f.store.exists(scope, path)) throw noFolder(path, 'list_folder shows the folders there are.');
+      if (f.mayRemove && !f.mayRemove(viewer, scope, path)) throw new ToolFailure('Only the person who made this folder can delete it.');
+      const res = f.store.remove(scope, path);
+      if (res === 'missing') throw noFolder(path, 'list_folder shows the folders there are.');
+      if (res === 'not-empty') throw new ToolFailure(`The folder "${path}" is not empty. Move or delete what is in it first (list_folder shows it).`);
+      return JSON.stringify({ deleted: true, folder: path });
+    }
+  }
+  throw new ToolFailure(`Unknown tool "${name}".`);
+}
 
 /**
  * A stored file's text, a part of it from `offset`: a PDF's (as Markdown) or a text file's. read_stored_file's answer, and
