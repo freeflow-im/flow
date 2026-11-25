@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageDetail } from '../api';
-import { draftFromMailto, forwardSubject, fromDraft, isDraftEmpty, prefill, replySubject } from './compose';
+import { draftFromMailto, forwardSubject, fromDraft, isDraftEmpty, prefill, replySubject, tightParagraphs } from './compose';
 
 const msg = (over: Partial<MessageDetail> = {}): MessageDetail => ({
   uid: 7,
@@ -143,5 +143,14 @@ describe('draftFromMailto', () => {
     expect(draftFromMailto('https://example.test')).toBeNull();
     expect(draftFromMailto('mailto:')).toBeNull();
     expect(draftFromMailto('mailto:not-an-address')).toBeNull();
+  });
+});
+
+describe('tightParagraphs', () => {
+  it('drops the paragraph margins and keeps a blank line one line tall', () => {
+    expect(tightParagraphs('<p>Hi</p><p></p><p>Bye</p>')).toBe('<p style="margin:0">Hi</p><p style="margin:0">&nbsp;</p><p style="margin:0">Bye</p>');
+  });
+  it('leaves other blocks alone', () => {
+    expect(tightParagraphs('<ul><li><p>one</p></li></ul><pre>x</pre>')).toBe('<ul><li><p style="margin:0">one</p></li></ul><pre>x</pre>');
   });
 });
