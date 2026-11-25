@@ -1,5 +1,5 @@
-// Mail's menu in Home's sidebar (docs/specs/home.md §2.1): only what a person goes to most. New message, Inbox and
-// Drafts. The accounts are a picker on the Mail row itself (`Mail ann@acme.test ▾`): it always shows the inbox's address,
+// Mail's menu in Home's sidebar (docs/specs/home.md §2.1): only what a person goes to most. New message, Inbox,
+// Drafts and Sent. The accounts are a picker on the Mail row itself (`Mail ann@acme.test ▾`): it always shows the inbox's address,
 // switches to another account's inbox, and adds an account. The other folders are in Mail itself.
 import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
 import type { MailAccount, MailFolder } from '../api';
@@ -28,6 +28,9 @@ export function mailMenu(accounts: MailAccount[], account: MailAccount, folders:
   }
   const drafts = findSpecial(folders, 'drafts');
   if (drafts) items.push({ id: folderItem(drafts.path), label: 'Drafts', icon: 'draft', count: drafts.total, href: folderHref(account.id, drafts.path) });
+  // No count on Sent, as in Mail's own sidebar: what was sent is never unread.
+  const sent = findSpecial(folders, 'sent');
+  if (sent) items.push({ id: folderItem(sent.path), label: 'Sent', icon: 'send', href: folderHref(account.id, sent.path) });
   return items;
 }
 
