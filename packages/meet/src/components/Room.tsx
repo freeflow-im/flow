@@ -13,6 +13,7 @@ import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '
 import { SendAgent } from './SendAgent';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
 import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
+import { ALIVE, guestKey, lastPeer, notePeer, readRejoin, REPLACES, withoutReplaced } from '../lib/rejoin';
 import { ChatFrame } from './ChatFrame';
 import { AutoClose } from './AutoClose';
 import { useMediaQuery, useResizableWidth } from '../hooks/layout';
@@ -45,7 +46,7 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'check'; entry: Entry }
   | { kind: 'joining'; media?: boolean }
-  | { kind: 'in'; client: Client; info: RoomInfo }
+  | { kind: 'in'; client: Client; info: RoomInfo; replaces: string | null }
   | { kind: 'left' }
   | { kind: 'error'; message: string; signIn?: boolean };
 
@@ -76,6 +77,47 @@ function useRoomUpdates(client: Client): void {
       client.participants.off('activeSpeaker', onAny);
     };
   }, [client]);
+}
+
+/**
+ * The connections that a newer connection of the same person replaced (lib/rejoin.ts): old connection → the new one.
+ * `replaces` is this page's own old connection, when this browser was in the room a moment ago: the page tells the room,
+ * and tells each person who comes in while RealtimeKit still has the old one.
+ */
+function useReplaced(client: Client, replaces: string | null): ReadonlyMap<string, string> {
+  const [replaced, setReplaced] = useState<ReadonlyMap<string, string>>(() => new Map(replaces ? [[replaces, client.self.id]] : []));
+  useEffect(() => {
+    const people = client.participants;
+    const onMessage = (m: { type: string; payload: unknown }) => {
+      const said = readRejoin(m.type, m.payload);
+      if (!said) return;
+      if (said.kind === 'replaces') {
+        // This page is the one named, and it is still open (the room in two tabs): say so, and stay drawn.
+        if (said.peerId === client.self.id) return void people.broadcastMessage(ALIVE, { peerId: said.peerId }).catch(() => {});
+        setReplaced((cur) => new Map(cur).set(said.peerId, said.by));
+      } else {
+        setReplaced((cur) => {
+          if (!cur.has(said.peerId)) return cur;
+          const next = new Map(cur);
+          next.delete(said.peerId);
+          return next;
+        });
+      }
+    };
+    const tell = () => {
+      if (replaces && people.joined.toArray().some((p) => p.id === replaces)) {
+        void people.broadcastMessage(REPLACES, { peerId: replaces, by: client.self.id }).catch(() => {});
+      }
+    };
+    people.on('broadcastedMessage', onMessage);
+    people.joined.on('participantJoined', tell);
+    tell();
+    return () => {
+      people.off('broadcastedMessage', onMessage);
+      people.joined.off('participantJoined', tell);
+    };
+  }, [client, replaces]);
+  return replaced;
 }
 
 /**
@@ -199,8 +241,9 @@ function PanelTab({ label, selected, dot, onClick }: { label: string; selected: 
   );
 }
 
-function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLeft: () => void }) {
+function InRoom({ client, info, replaces, onLeft }: { client: Client; info: RoomInfo; replaces: string | null; onLeft: () => void }) {
   useRoomUpdates(client);
+  const replaced = useReplaced(client, replaces);
   const [panel, setPanel] = useState<Panel | null>(null);
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
   // Messages posted while the Chat tab is closed: the dot on the Chat button.
@@ -254,7 +297,8 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
       .finally(() => setRecordingBusy(false));
   };
   const self = client.self;
-  const others = client.participants.joined.toArray() as RTKParticipant[];
+  // A connection its own person replaced is not drawn or heard while RealtimeKit still has it (lib/rejoin.ts).
+  const others = withoutReplaced(self, client.participants.joined.toArray() as RTKParticipant[], replaced);
   const everyone: Person[] = [self, ...others];
   const speaker = client.participants.lastActiveSpeaker;
   const presenter = everyone.find((p) => p.screenShareEnabled);
@@ -481,7 +525,7 @@ export function Room({ meetingRef }: { meetingRef: string }) {
         room = { ref: r.meeting.code, title: r.meeting.title, host: r.host, guest: false, meeting: r.meeting, chat: memberChat(r.meeting) };
         authToken = r.authToken;
       } else {
-        const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '');
+        const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '', guestKey());
         room = { ref: r.code, title: r.title, host: false, guest: true, meeting: null, chat: guestChat(r) };
         authToken = r.authToken;
       }
@@ -494,7 +538,10 @@ export function Room({ meetingRef }: { meetingRef: string }) {
       if (!mounted.current) return void c.leave().catch(() => {});
       client.current = c;
       info.current = room;
-      setPhase({ kind: 'in', client: c, info: room });
+      // This browser's connection from before, if it was in the room a moment ago and never said it left.
+      const before = lastPeer(room.ref);
+      notePeer(room.ref, c.self.id);
+      setPhase({ kind: 'in', client: c, info: room, replaces: before && before !== c.self.id ? before : null });
       // A chime says the join has finished (lib/chime.ts).
       void playJoinChime();
     } catch (e) {
@@ -531,11 +578,16 @@ export function Room({ meetingRef }: { meetingRef: string }) {
     };
   }, [meetingRef, join]);
 
-  // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
+  // Closing or reloading the tab leaves too. RealtimeKit is told, so the others lose this tile at once: without it the
+  // old connection stays until RealtimeKit times it out, and a person who comes straight back shows twice. Our server
+  // hears it at once as well (a huddle's roster in Chat).
   useEffect(() => {
     mounted.current = true;
     const onClose = () => {
-      if (client.current?.self.roomJoined && info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
+      const c = client.current;
+      if (!c?.self.roomJoined) return;
+      void c.leave().catch(() => {});
+      if (info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
     };
     window.addEventListener('pagehide', onClose);
     return () => {
@@ -553,6 +605,7 @@ export function Room({ meetingRef }: { meetingRef: string }) {
     return (
       <InRoom
         client={phase.client}
+        replaces={phase.replaces}
         info={phase.info}
         onLeft={() => {
           if (!phase.info.guest) void api.leave(phase.info.ref).catch(() => {});
