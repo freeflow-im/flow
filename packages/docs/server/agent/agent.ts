@@ -14,7 +14,7 @@ import { AgentNotFoundError, type ClaudeAgentDriver } from '#runtime/local/claud
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
-import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type ServerToolEnvExtensions } from './tools.ts';
+import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type FolderTools, type ServerToolEnvExtensions } from './tools.ts';
 import { closeSearches, deferTools, keepReferencedTools, openSearches, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
 import { answerOpenCalls, portableHistory } from './history.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
@@ -49,6 +49,8 @@ export interface AgentOptions {
   files?: FileStore;
   /** Makes PDFs of files, for export_pdf (server/pdf.ts). */
   pdf?: PdfMaker;
+  /** The library's folders, for the folder tools (list_folder, create_folder, move_file, delete_folder). */
+  folders?: FolderTools;
   /** Whether the assistant can file background jobs (app changes, research); the desktop app cannot. Default true. */
   jobs?: boolean;
   /** Runs the turns of a user who chose their own Claude Code (the desktop app; claudeAgent.ts). */
@@ -98,6 +100,7 @@ export class AgentService {
   private images: ImageStore | undefined;
   private files: FileStore | undefined;
   private pdf: PdfMaker | undefined;
+  private folders: FolderTools | undefined;
   private jobs: boolean;
   private claudeAgent: ClaudeAgentDriver | null;
   private pages: ReadonlySet<string>;
@@ -118,6 +121,7 @@ export class AgentService {
     this.images = opts.images;
     this.files = opts.files;
     this.pdf = opts.pdf;
+    this.folders = opts.folders;
     this.jobs = opts.jobs ?? true;
     this.claudeAgent = opts.claudeAgent ?? null;
     this.pages = opts.pages ?? OWN_PAGES;
@@ -270,7 +274,7 @@ export class AgentService {
     if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
     // Search with the user's Brave key, else the server's, else the provider's own search.
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(this.extend?.(userId, access.scope) ?? {}) };
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, folders: this.folders, context: req.context, search, ...(this.extend?.(userId, access.scope) ?? {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     // Most tools are deferred behind the provider's tool search (toolSearch.ts); the set is fixed for the turn so the
     // cached prefix holds across its steps.

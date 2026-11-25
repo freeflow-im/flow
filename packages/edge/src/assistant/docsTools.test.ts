@@ -131,4 +131,58 @@ describe('Docs tools over HTTP', () => {
       connectors: [{ id: 'stripe', name: 'Stripe', datasets: ['charges'] }],
     });
   });
+
+  it('lists, creates, moves into and deletes folders with the file list’s routes, in the chat’s root', async () => {
+    const made = new Set<string>(['Invoices']);
+    const where = new Map<string, string>([['d1', ''], ['f1', '']]);
+    const docIds = new Set(['d1']);
+    const q = (req: Request, k: string) => new URL(req.url).searchParams.get(k) ?? '';
+    const f = fake({
+      'GET /api/library': (req) => q(req, 'folder') === 'Nowhere'
+        ? Response.json({ error: 'Folder not found' }, { status: 404 })
+        : Response.json({ folder: q(req, 'folder'), folders: [{ name: 'Invoices', path: 'Invoices', id: 'x' }], docs: [{ id: 'd1', kind: 'doc', title: 'Plan', updatedAt: '' }], files: [{ id: 'f1', filename: 'a.pdf', type: 'application/pdf', size: 3 }] }),
+      'POST /api/folders': (req, body) => {
+        const p = [q(req, 'folder'), (body as { name: string }).name].filter(Boolean).join('/');
+        if (made.has(p)) return Response.json({ error: 'There is already a folder' }, { status: 409 });
+        made.add(p);
+        return Response.json({ folder: { path: p } });
+      },
+      'POST /api/library/move': (req, body) => {
+        const { kind, id } = body as { kind: string; id: string };
+        const folder = q(req, 'folder');
+        if (folder && !made.has(folder)) return Response.json({ error: 'Folder not found' }, { status: 404 });
+        if (id === 'theirs') return Response.json({ error: 'That folder is in another part of the library.' }, { status: 400 });
+        if (!where.has(id) || (kind === 'file') === docIds.has(id)) return Response.json({ error: 'File not found' }, { status: 404 });
+        where.set(id, folder);
+        return Response.json({ ok: true });
+      },
+      'DELETE /api/folders': (req) => {
+        const p = q(req, 'folder');
+        if (!made.has(p)) return Response.json({ error: 'Folder not found' }, { status: 404 });
+        if ([...where.values()].includes(p)) return Response.json({ error: 'This folder is not empty.' }, { status: 409 });
+        made.delete(p);
+        return Response.json({ ok: true });
+      },
+    });
+    expect(await run(f, ORG_FILES, 'list_folder', {})).toEqual({ folder: '', folders: ['Invoices'], docs: [{ id: 'd1', kind: 'doc', title: 'Plan' }], files: [{ id: 'f1', filename: 'a.pdf', type: 'application/pdf' }] });
+    await expect(run(f, ORG_FILES, 'list_folder', { folder: 'Nowhere' })).rejects.toThrow(ToolFailure);
+    expect(await run(f, ORG_FILES, 'create_folder', { path: 'Invoices/2026' })).toEqual({ folder: 'Invoices/2026', created: true });
+    expect(await run(f, ORG_FILES, 'create_folder', { path: 'Invoices' })).toEqual({ folder: 'Invoices', created: false });
+    expect(await run(f, ORG_FILES, 'move_file', { ids: ['d1', 'f1', 'theirs', 'gone'], folder: 'Invoices/2026' })).toEqual({
+      folder: 'Invoices/2026',
+      moved: ['d1', 'f1'],
+      failed: [{ id: 'theirs', error: 'That folder is in another part of the library.' }, { id: 'gone', error: expect.stringMatching(/no file/) }],
+    });
+    expect(where.get('f1')).toBe('Invoices/2026');
+    await expect(run(f, ORG_FILES, 'move_file', { ids: ['d1'], folder: 'Nowhere' })).rejects.toThrow(/create_folder/);
+    await expect(run(f, ORG_FILES, 'delete_folder', { path: 'Invoices/2026' })).rejects.toThrow(/not empty/);
+    await run(f, ORG_FILES, 'move_file', { ids: ['d1', 'f1'], folder: '' });
+    expect(await run(f, ORG_FILES, 'delete_folder', { path: 'Invoices/2026' })).toEqual({ deleted: true, folder: 'Invoices/2026' });
+    await expect(run(f, ORG_FILES, 'delete_folder', { path: 'Invoices/2026' })).rejects.toThrow(/no folder/);
+    expect(f.calls.slice(0, 5)).toEqual([
+      'GET /api/library?workspace=org-1&shared=1&folder=', 'GET /api/library?workspace=org-1&shared=1&folder=Nowhere',
+      'POST /api/folders?workspace=org-1&shared=1&folder=', 'POST /api/folders?workspace=org-1&shared=1&folder=Invoices',
+      'POST /api/folders?workspace=org-1&shared=1&folder=',
+    ]);
+  });
 });

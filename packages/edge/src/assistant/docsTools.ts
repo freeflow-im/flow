@@ -9,7 +9,8 @@ import { docNode } from '@flow/docs/shared/doc.ts';
 import { markdownToDoc } from '@flow/docs/shared/docMarkdown.ts';
 import { Engine } from '@flow/docs/shared/formula/engine.ts';
 import { STORED_IMAGE_RE } from '@flow/docs/shared/types.ts';
-import { checkSearchRate, runDocsTool, ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
+import { checkSearchRate, folderListing, folderPathOf, moveResult, noFolder, runDocsTool, ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
+import { joinFolder } from '@flow/docs/shared/folders.ts';
 import { importLimit, webImportName } from '@flow/docs/server/importFile.ts';
 import { fetchPublicFile, WebFetchError } from '@flow/docs/server/webFetch.ts';
 import { contentSearchLimit, contentSearchQuery, contentSearchResult } from '@flow/docs/server/search.ts';
@@ -308,6 +309,51 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
         if (e instanceof WebFetchError) throw new ToolFailure(e.message);
         throw e;
       }
+    }
+    // The library's folders: the routes the Docs client's file list uses, in the chat's root.
+    case 'list_folder': {
+      const folder = folderPathOf(input.folder);
+      const a = await call(docs, 'GET', `/api/library?${placeQuery(place)}&folder=${enc(folder)}`);
+      if (a.status === 404) throw noFolder(folder, 'list_folder with no folder shows the top of the library.');
+      if (a.status !== 200) throw refused(a);
+      return folderListing(folder, ((a.data.folders ?? []) as { path: string }[]).map((f) => f.path), a.data.docs ?? [], a.data.files ?? []);
+    }
+    case 'create_folder': {
+      // The route makes one folder in an existing one, so each missing folder on the way is made in turn.
+      const path = folderPathOf(input.path, false);
+      let parent = '';
+      let created = false;
+      for (const name of path.split('/')) {
+        const a = await call(docs, 'POST', `/api/folders?${placeQuery(place)}&folder=${enc(parent)}`, { name });
+        if (a.status !== 200 && a.status !== 409) throw refused(a);
+        created = a.status === 200;
+        parent = joinFolder(parent, name);
+      }
+      return JSON.stringify({ folder: path, created });
+    }
+    case 'move_file': {
+      const folder = folderPathOf(input.folder);
+      const moved: string[] = [];
+      const failed: { id: string; error: string }[] = [];
+      for (const id of [...new Set(input.ids as string[])]) {
+        // A document of any kind, else a stored file: the route finds each by its own kind.
+        let a = await call(docs, 'POST', `/api/library/move?${placeQuery(place)}&folder=${enc(folder)}`, { kind: 'sheet', id });
+        if (a.status === 404 && a.data.error !== 'Folder not found') a = await call(docs, 'POST', `/api/library/move?${placeQuery(place)}&folder=${enc(folder)}`, { kind: 'file', id });
+        if (a.status === 404 && a.data.error === 'Folder not found') throw noFolder(folder, 'Create it with create_folder first.');
+        if (a.status === 200) moved.push(id);
+        else if (a.status === 404) failed.push({ id, error: 'There is no file with this id that you may move.' });
+        else if (a.status >= 400 && a.status < 500) failed.push({ id, error: refused(a).message });
+        else throw refused(a);
+      }
+      return moveResult(folder, moved, failed);
+    }
+    case 'delete_folder': {
+      const path = folderPathOf(input.path, false);
+      const a = await call(docs, 'DELETE', `/api/folders?${placeQuery(place)}&folder=${enc(path)}`);
+      if (a.status === 404) throw noFolder(path, 'list_folder shows the folders there are.');
+      if (a.status === 409) throw new ToolFailure(`The folder "${path}" is not empty. Move or delete what is in it first (list_folder shows it).`);
+      if (a.status !== 200) throw refused(a);
+      return JSON.stringify({ deleted: true, folder: path });
     }
     default:
       // web_search and image_search: no store, so they run as they do in-process.
