@@ -4,12 +4,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Lock, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import { signInUrl } from '../api';
+import { pickDevice, rememberDevice, rememberedDevices, useDeviceLists, type DeviceChoice, type DeviceKind } from '../lib/devices';
+import { DevicePickers, MicLevel, TestSpeaker } from './DevicePickers';
 
 export interface JoinChoice {
   audio: boolean;
   video: boolean;
   /** A guest's name; a member joins as themselves. */
   name?: string;
+  /** The camera, microphone and speaker chosen here (lib/devices.ts); unset means the default. */
+  devices?: DeviceChoice;
 }
 
 const NAME_KEY = 'flow.meet.guestName';
@@ -38,30 +42,42 @@ export function whoIsHere(people: string[]): string {
   return `${people[0]} and ${people.length - 1} others are here`;
 }
 
-/** Shows the camera while it is chosen, and lets it go when it is not (or when the screen closes). */
-function useCameraPreview(on: boolean): { ref: React.RefObject<HTMLVideoElement | null>; error: string | null } {
-  const ref = useRef<HTMLVideoElement>(null);
+/**
+ * A local camera or microphone stream while it is on, from the chosen device (falling back to any device when that one
+ * is gone); it is let go when turned off, when the device changes, and when the screen closes.
+ */
+function useLocalStream(kind: 'video' | 'audio', on: boolean, deviceId: string | undefined): { stream: MediaStream | null; error: string | null } {
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!on) return;
-    let stream: MediaStream | null = null;
+    let got: MediaStream | null = null;
     let cancelled = false;
     setError(null);
-    navigator.mediaDevices
-      ?.getUserMedia({ video: true })
+    const md = navigator.mediaDevices;
+    const ask = (c: MediaTrackConstraints | true) => md.getUserMedia(kind === 'video' ? { video: c } : { audio: c });
+    (md ? ask(deviceId ? { deviceId: { exact: deviceId } } : true).catch(() => ask(true)) : Promise.reject(new Error('no media')))
       .then((s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop());
-        stream = s;
-        if (ref.current) ref.current.srcObject = s;
+        got = s;
+        setStream(s);
       })
-      .catch(() => !cancelled && setError('The camera is not available. Check the browser’s permission for this site.'));
+      .catch(() => !cancelled && setError(`The ${kind === 'video' ? 'camera' : 'microphone'} is not available. Check the browser’s permission for this site.`));
     return () => {
       cancelled = true;
-      stream?.getTracks().forEach((t) => t.stop());
-      if (ref.current) ref.current.srcObject = null;
+      got?.getTracks().forEach((t) => t.stop());
+      setStream(null);
     };
-  }, [on]);
-  return { ref, error };
+  }, [kind, on, deviceId]);
+  return { stream, error };
+}
+
+function Preview({ stream }: { stream: MediaStream | null }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+  }, [stream]);
+  return <video ref={ref} autoPlay playsInline muted className="size-full -scale-x-100 object-cover" />;
 }
 
 function Toggle({ label, on, onClick, children }: { label: string; on: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -97,7 +113,20 @@ export function CheckScreen({
   const [audio, setAudio] = useState(true);
   const [video, setVideo] = useState(false);
   const [name, setName] = useState(rememberedName);
-  const camera = useCameraPreview(video);
+  const [chosen, setChosen] = useState<DeviceChoice>(rememberedDevices);
+  const camera = useLocalStream('video', video, chosen.videoinput);
+  const mic = useLocalStream('audio', audio, chosen.audioinput);
+  // Device names appear once the browser has given the camera or microphone, so the lists load again then.
+  const lists = useDeviceLists(`${!!camera.stream}${!!mic.stream}`);
+  const inUse: DeviceChoice = {
+    videoinput: pickDevice(lists.videoinput, chosen.videoinput),
+    audioinput: pickDevice(lists.audioinput, chosen.audioinput),
+    audiooutput: pickDevice(lists.audiooutput, chosen.audiooutput),
+  };
+  const choose = (kind: DeviceKind, id: string) => {
+    rememberDevice(kind, id);
+    setChosen((c) => ({ ...c, [kind]: id }));
+  };
   const blocked = guest && locked;
   const ready = !blocked && (!guest || name.trim().length > 0);
 
@@ -105,32 +134,33 @@ export function CheckScreen({
     e.preventDefault();
     if (!ready) return;
     if (guest) rememberName(name.trim());
-    onJoin({ audio, video, ...(guest ? { name: name.trim() } : {}) });
+    onJoin({ audio, video, devices: chosen, ...(guest ? { name: name.trim() } : {}) });
   };
 
   return (
     <div className="flex h-full items-center justify-center overflow-auto bg-[#202124] p-6 text-[#e8eaed]">
       <form onSubmit={join} className="flex w-full max-w-4xl flex-wrap items-center justify-center gap-8">
-        <div className="flex w-full max-w-[520px] flex-col items-center gap-3">
+        <div className="flex w-full max-w-[560px] flex-col items-center gap-3">
           <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#3c4043]">
-            {video ? (
-              <video ref={camera.ref} autoPlay playsInline muted className="size-full -scale-x-100 object-cover" />
-            ) : (
-              <span className="text-sm text-[#bdc1c6]">Camera is off</span>
-            )}
+            {video ? <Preview stream={camera.stream} /> : <span className="text-sm text-[#bdc1c6]">Camera is off</span>}
+            <div className="absolute inset-x-0 bottom-3 flex justify-center gap-3">
+              <Toggle label={audio ? 'Turn microphone off' : 'Turn microphone on'} on={audio} onClick={() => setAudio((a) => !a)}>
+                {audio ? <Mic size={22} /> : <MicOff size={22} />}
+              </Toggle>
+              <Toggle label={video ? 'Turn camera off' : 'Turn camera on'} on={video} onClick={() => setVideo((v) => !v)}>
+                {video ? <Video size={22} /> : <VideoOff size={22} />}
+              </Toggle>
+            </div>
           </div>
-          {camera.error && (
+          {(camera.error || mic.error) && (
             <p role="alert" className="m-0 text-sm text-[#f28b82]">
-              {camera.error}
+              {camera.error ?? mic.error}
             </p>
           )}
-          <div className="flex gap-3">
-            <Toggle label={audio ? 'Turn microphone off' : 'Turn microphone on'} on={audio} onClick={() => setAudio((a) => !a)}>
-              {audio ? <Mic size={22} /> : <MicOff size={22} />}
-            </Toggle>
-            <Toggle label={video ? 'Turn camera off' : 'Turn camera on'} on={video} onClick={() => setVideo((v) => !v)}>
-              {video ? <Video size={22} /> : <VideoOff size={22} />}
-            </Toggle>
+          <DevicePickers lists={lists} value={inUse} onChange={choose} />
+          <div className="flex w-full items-center justify-between">
+            {audio ? <MicLevel stream={mic.stream} /> : <span className="text-xs text-[#bdc1c6]">Microphone is off</span>}
+            <TestSpeaker speaker={inUse.audiooutput} />
           </div>
         </div>
 
