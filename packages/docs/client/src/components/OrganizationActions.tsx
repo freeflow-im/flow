@@ -3,8 +3,13 @@
 // of the home page and each editor's File menu offer Share… (ShareWithDialog: people, channels, the organization, a
 // link), Share with organization, Make private and, for someone in more than one organization, Move to organization…
 // (the same root in another organization). They are grant changes on the server (server/access.ts): the first two a
-// manager's, the move the owner's, so the menus offer them by the user's role.
+// manager's, the move the owner's, so the menus offer them by the user's role. The File menu also offers Send as email:
+// Mail's composer in a drawer on the right (@flow/suite-bar ComposeDrawer.tsx), with the file added as Mail adds a file
+// from Docs (a link or an attachment by the recipients, docs/specs/side-panel.md §7.1).
 import { useState, type ReactNode } from 'react';
+import { ComposeDrawer } from '@flow/suite-bar/compose-drawer';
+import type { MailDocsFile } from '@flow/suite-bar';
+import { mailDocsFileOf } from '../sendAsEmail.ts';
 import { api, type Place } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { useOrganization } from '../organization.ts';
@@ -82,11 +87,12 @@ export function OrganizationPicker(props: { title: string; current: string | nul
  * An editor's File menu items for the open file (none outside the suite), and the picker they may open. `changed`
  * is told the file's new metadata, so the page's breadcrumbs name its new root.
  */
-export function useOrganizationMenu(file: (Scoped & { title: string; kind?: string; type?: string }) | null, changed: (meta: Scoped) => void, onError: (message: string) => void): { items: MenuItem[]; dialog: ReactNode } {
+export function useOrganizationMenu(file: (Scoped & { title: string; kind?: string; type?: string; size?: number; format?: string }) | null, changed: (meta: Scoped) => void, onError: (message: string) => void): { items: MenuItem[]; dialog: ReactNode } {
   const { suite } = useAuth();
   const org = useOrganization();
   const [picking, setPicking] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [mailing, setMailing] = useState<MailDocsFile | null>(null);
   if (!suite || !file || !org.active) return { items: [], dialog: null };
   // A document of any kind has a `kind`; a stored file (FilePage) a `type`.
   const objectKind = file.kind ? 'sheet' : 'file';
@@ -100,6 +106,7 @@ export function useOrganizationMenu(file: (Scoped & { title: string; kind?: stri
       { label: 'Share…', action: () => setSharing(true) },
       ...(!file.role || file.role === 'manager' ? [{ label: labels.share, action: () => void move({ shared: !file.shared }).catch((e: Error) => onError(e.message)) }] : []),
       ...(labels.move && !file.role ? [{ label: labels.move, action: () => setPicking(true) }] : []),
+      { label: 'Send as email', action: () => setMailing(mailDocsFileOf(file)) },
       'sep',
     ],
     dialog: (
@@ -113,6 +120,14 @@ export function useOrganizationMenu(file: (Scoped & { title: string; kind?: stri
             linkable={file.kind === 'deck' || (!!file.type && file.type.startsWith('video/'))}
             onClose={() => setSharing(false)}
             onMoved={(shared) => changed({ ...file, ...(shared ? { shared: true } : { shared: undefined }) })}
+          />
+        )}
+        {mailing && (
+          <ComposeDrawer
+            key={mailing.id}
+            email={{ to: [], subject: file.title, docs: [mailing] }}
+            label={`Send “${file.title}” as email`}
+            onClose={() => setMailing(null)}
           />
         )}
       </>

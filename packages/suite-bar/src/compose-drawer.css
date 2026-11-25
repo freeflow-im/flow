@@ -1,0 +1,20 @@
+/* Mail's composer beside an app (ComposeDrawer.tsx): a panel on the right edge, over the page. */
+.compose-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100vw);
+  background: #fff;
+  border-left: 1px solid var(--side-panel-border, #dadce0);
+  box-shadow: -12px 0 48px rgba(16, 24, 40, 0.2);
+}
+.compose-drawer-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+}

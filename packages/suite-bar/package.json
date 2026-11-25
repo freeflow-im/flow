@@ -10,6 +10,7 @@
     "./assistant-dock": "./src/AssistantDock.tsx",
     "./assistant-chat": "./src/AssistantChat.tsx",
     "./side-panel": "./src/SidePanel.tsx",
+    "./compose-drawer": "./src/ComposeDrawer.tsx",
     "./account-settings": "./src/AccountSettings.tsx",
     "./email-approval": "./src/EmailApproval.tsx",
     "./domain-setup": "./src/DomainSetup.tsx",

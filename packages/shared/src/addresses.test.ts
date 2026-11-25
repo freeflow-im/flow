@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressOf, chatPageAddress, createAddress, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, type AddressedReference } from './addresses.js';
+import { addressOf, chatPageAddress, createAddress, mailDocsOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, type AddressedReference } from './addresses.js';
 import { APP_MANIFESTS } from './manifests.js';
 import { formatReference, parseReference } from './platform.js';
 
@@ -83,6 +83,19 @@ describe('addresses', () => {
     expect(chatPageAddress('admin')).toBe('/chat/?open=admin');
     const mail = new URL(createAddress('mail', { to: [{ email: 'a@x.org', name: 'Ann' }, 'b+c@y.org'], subject: 'Call & notes', body: 'Hi there' }), ORIGIN);
     expect([mail.pathname, mail.searchParams.get('mailto')]).toEqual(['/mail/', 'mailto:a@x.org,b%2Bc@y.org?subject=Call%20%26%20notes&body=Hi%20there']);
+    expect(mail.searchParams.has('docs')).toBe(false);
+    const doc = { kind: 'doc', id: 'd1', name: 'Plan', folder: 'Work', shared: true } as const;
+    const withDoc = new URL(createAddress('mail', { to: [], subject: 'Plan', docs: [doc] }), ORIGIN);
+    expect([withDoc.searchParams.get('mailto'), mailDocsOf(withDoc.searchParams.get('docs'))]).toEqual(['mailto:?subject=Plan', [doc]]);
+  });
+
+  it('reads the Docs files a new email names, dropping what is not one', () => {
+    expect(mailDocsOf(null)).toEqual([]);
+    expect(mailDocsOf('nope')).toEqual([]);
+    expect(mailDocsOf('{"id":"x"}')).toEqual([]);
+    expect(mailDocsOf(JSON.stringify([{ kind: 'file', id: 'f1', name: 'a.pdf', type: 'application/pdf', size: 3 }, { kind: 'folder', id: 'x', name: 'x' }, { kind: 'doc', name: 'no id' }, null]))).toEqual([
+      { kind: 'file', id: 'f1', name: 'a.pdf', folder: '', shared: false, type: 'application/pdf', size: 3 },
+    ]);
   });
 
   it('names Home’s Settings page by section, and reads the section back', () => {

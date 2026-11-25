@@ -9,8 +9,8 @@ export { STATUS_OPTIONS, AWAY_STATUS, isAway, statusPatch, type StatusOption } f
 export { guestTabs, GUEST_TABS_NOTE, suiteTabsFrom, type SuiteTabOptions } from './tabs';
 export { APPS_CHANGED, appsChanged, fetchUserApps, userAppTabId, userAppTabs, useUserAppTabs, type UserAppTabSource } from './userAppTabs';
 export { APP_MANIFESTS } from '@flow/shared/manifests';
-export { intent, addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, SETTINGS_SECTIONS, type IntentOptions } from './lib/intents';
-export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference, SettingsSection } from './lib/intents';
+export { intent, addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, mailDocsOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, SETTINGS_SECTIONS, type IntentOptions } from './lib/intents';
+export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, MailDocsFile, ReferenceTarget, ResolvedReference, SettingsSection } from './lib/intents';
 export { appOfPath, isChangedMessage, isInHome, isOpenMessage, onOpenFromHome, openInHome, routeLinksToHome, tellHome, type SuiteChangedMessage, type SuiteOpenMessage } from './lib/embed';
 export { findMenuItem, isMenuMessage, isSelectMessage, useHomeMenu, SUITE_MENU_ICONS, type SuiteMenuIcon, type SuiteMenuItem, type SuiteMenuMessage, type SuiteMenuPicker, type SuiteSelectMessage } from './lib/menu';
 export { DEFAULT_PROMPTS, MAX_PROMPTS, MAX_PROMPT_LENGTH, PROMPT_PAGES, PROMPT_PAGE_LABELS, PROMPTS_CHANGED, cleanPrompts, promptsAddress, promptsChanged, readPrompts, useSuggestedPrompts, type AssistantPrompts, type PromptPage } from './lib/prompts';
