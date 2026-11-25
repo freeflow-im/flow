@@ -133,6 +133,8 @@ const MAX_WINDOW_MS = 93 * DAY_MS;
 const SEARCH_SPAN_MS = 365 * DAY_MS;
 /** The account's first sync, before POST answers; the rest goes on in the background. */
 const FIRST_SYNC_MS = 8_000;
+/** How recently another calendar of the account must have synced for one calendar's failure not to mark the account. */
+const REACHABLE_MS = 5 * 60_000;
 const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
 const json = async (c: Context) => c.req.json().catch(() => { throw badRequest('the body is not JSON'); });
 
@@ -558,7 +560,10 @@ export class Calendar extends DurableObject<CalendarEnv> {
         this.setStatus(acct.id, 'ok', null);
       } catch (err) {
         error = (err as Error).message.slice(0, 300);
-        if (err instanceof ApiError && (err.code === 'auth_failed' || err.code === 'connect_failed')) this.setStatus(acct.id, err.code, err.message);
+        // One calendar failing while the account's others just synced is that calendar's trouble (the sync log has it),
+        // not a server that "could not be reached": the account keeps its status.
+        const onlyThisOne = err instanceof ApiError && err.code === 'connect_failed' && this.store.anotherSyncedSince(acct.id, c.id, Date.now() - REACHABLE_MS);
+        if (err instanceof ApiError && (err.code === 'auth_failed' || err.code === 'connect_failed') && !onlyThisOne) this.setStatus(acct.id, err.code, err.message);
         if (err instanceof ApiError && err.code === 'not_found') { this.store.forgetCalendar(c.id); this.store.ensureDefault(); }
         else this.sql.exec('UPDATE calendars SET last_synced = ? WHERE id = ?', Date.now(), c.id);
         throw err;
