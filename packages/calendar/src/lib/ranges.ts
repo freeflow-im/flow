@@ -1,7 +1,7 @@
 // The views and the ranges they show (docs/specs/calendar.md §5): which days a view covers for a date, a step back or on,
 // the neighbours to read ahead, the title, and FullCalendar's name for the view. Local time throughout: the views are in
 // the browser's zone, and the API is asked for the instants those days begin and end at.
-import { addDays, addMonths, addWeeks, endOfMonth, format, isSameMonth, isSameYear, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
+import { addDays, addMonths, addWeeks, differenceInCalendarDays, endOfMonth, format, isSameMonth, isSameYear, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
 
 export type View = 'day' | 'week' | 'month' | 'agenda';
 export const VIEWS: View[] = ['day', 'week', 'month', 'agenda'];
@@ -37,6 +37,23 @@ export function titleOf(view: View, date: Date, weekStartsOn: 0 | 1 = 0): string
   if (isSameMonth(start, last)) return `${format(start, 'MMM d')} – ${format(last, 'd, yyyy')}`;
   if (isSameYear(start, last)) return `${format(start, 'MMM d')} – ${format(last, 'MMM d, yyyy')}`;
   return `${format(start, 'MMM d, yyyy')} – ${format(last, 'MMM d, yyyy')}`;
+}
+
+/** How far a day or week view is from the one holding today, for the toolbar's chip ("Next week", "3 days ago") and
+ *  the Today button's arrow: `dir` is 1 when the view is in the future (Today points back), -1 in the past. Null on the
+ *  view holding today, and for month and agenda, which carry no offset. */
+export function offsetOf(view: View, date: Date, today: Date, weekStartsOn: 0 | 1 = 0): { dir: 1 | -1; label: string } | null {
+  if (view !== 'day' && view !== 'week') return null;
+  const n = view === 'day'
+    ? differenceInCalendarDays(date, today)
+    : Math.round(differenceInCalendarDays(rangeOf('week', date, weekStartsOn).start, rangeOf('week', today, weekStartsOn).start) / 7);
+  if (n === 0) return null;
+  const abs = Math.abs(n);
+  const unit = view === 'day' ? 'day' : 'week';
+  const label = abs === 1
+    ? (view === 'day' ? (n > 0 ? 'Tomorrow' : 'Yesterday') : (n > 0 ? 'Next week' : 'Last week'))
+    : n > 0 ? `In ${abs} ${unit}s` : `${abs} ${unit}s ago`;
+  return { dir: n > 0 ? 1 : -1, label };
 }
 
 /** A range as the API asks for it, and as the cache keys it. */
