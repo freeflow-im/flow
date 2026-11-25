@@ -32,7 +32,8 @@ export const api = {
   join: (ref: string) => call<MeetingJoinDTO>('POST', `/v1/meetings/${ref}/join`, {}),
   /** What the link shows anyone, signed in or not (phase 3's check screen). */
   preview: (code: string) => call<MeetingPreviewDTO>('GET', `/v1/meetings/${code}/guest`),
-  joinAsGuest: (code: string, name: string) => call<MeetingGuestJoinDTO>('POST', `/v1/meetings/${code}/guest`, { name }),
+  /** `key` is this browser's guest secret (lib/rejoin.ts): the same guest coming back is the same participant. */
+  joinAsGuest: (code: string, name: string, key?: string) => call<MeetingGuestJoinDTO>('POST', `/v1/meetings/${code}/guest`, key ? { name, key } : { name }),
   setLocked: (ref: string, locked: boolean) => call<MeetingDTO>('PATCH', `/v1/meetings/${ref}`, { locked }),
   leave: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/leave`, {}),
   /** Start or stop recording (anyone in the room who is a member, ruling R8). The room hears the change from RealtimeKit. */

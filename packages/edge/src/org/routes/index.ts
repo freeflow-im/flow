@@ -730,7 +730,8 @@ export function registerRoutes(app: FastifyInstance): void {
     }
     const name = (req.body as { name?: unknown } | undefined)?.name;
     if (typeof name !== 'string') throw badRequest('validation', 'name: expected a string');
-    const { join, visitorToken } = await mt.joinAsGuest(id, name);
+    const key = (req.body as { key?: unknown }).key;
+    const { join, visitorToken } = await mt.joinAsGuest(id, name, typeof key === 'string' ? key : undefined);
     if (visitorToken) setVisitorCookie(reply, visitorToken);
     return reply.send(join);
   });
