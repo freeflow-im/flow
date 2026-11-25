@@ -59,12 +59,13 @@ body {
   line-height: 1.5;
 }
 .mail-editor .ProseMirror p {
-  margin: 0 0 0.5em;
+  /* One line per Enter, as Gmail writes: a blank line is an empty paragraph, not a margin (lib/compose.ts tightParagraphs). */
+  margin: 0;
 }
 .mail-editor .ProseMirror ul,
 .mail-editor .ProseMirror ol {
   padding-left: 1.5em;
-  margin: 0 0 0.5em;
+  margin: 0;
 }
 .mail-editor .ProseMirror ul {
   list-style: disc;

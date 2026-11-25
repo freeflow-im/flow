@@ -10,7 +10,7 @@ import { ChevronDown, FileText, Forward, Link2, Loader2, Paperclip, Reply, Reply
 import { hasFlowRef, readFlowRef, whenDragEnds } from '@flow/suite-bar';
 import { attachmentUrl, mailApi, MAX_SEND_BYTES, type Address, type MailAccount } from '../api';
 import { parseAddressList } from '../lib/addresses';
-import { isDraftEmpty, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from '../lib/compose';
+import { isDraftEmpty, tightParagraphs, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from '../lib/compose';
 import { fileSize } from '../lib/format';
 import { attachedAs, docsFiles, type DocsFile } from '../lib/docsFiles';
 import { docsFileOfRef, fetchMembers, linkByDefault, linksBlock, memberOf, shareWith, useOrgMembers } from '../lib/docsLink';
@@ -253,8 +253,8 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
           ...(r.bcc.length ? { bcc: r.bcc } : {}),
           subject,
           // The links go after what was written, above the folded quote.
-          html: live ? live.getHTML() + links.html + (hiddenQuote ?? '') : links.html,
-          text: (live?.getText({ blockSeparator: '\n\n' }) ?? '') + (links.text ? `\n\n${links.text}` : '') + (hiddenQuote ? `\n\n${quoteText(hiddenQuote)}` : ''),
+          html: live ? tightParagraphs(live.getHTML()) + links.html + (hiddenQuote ?? '') : links.html,
+          text: (live?.getText({ blockSeparator: '\n' }) ?? '') + (links.text ? `\n\n${links.text}` : '') + (hiddenQuote ? `\n\n${quoteText(hiddenQuote)}` : ''),
           ...(initial.inReplyTo ? { inReplyTo: initial.inReplyTo } : {}),
           ...(initial.references?.length ? { references: initial.references } : {}),
           ...(mode === 'draft' && request.source ? { replacesDraft: request.source } : {}),
