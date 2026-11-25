@@ -83,3 +83,25 @@ up afterwards: Cloudflare dashboard → Workers & Pages → freeflow-edge → Lo
 Reading a slow action: large `queuedMs` = the browser held the call (too many calls at once, e.g. every query reloading
 when the window gets focus); large `waitMs` with a small server `total` = time before the Worker answered (cold start,
 network); a large `lock` = waiting behind another IMAP operation on that account; a large `imap` = the mail server.
+
+## Reading production logs
+
+Start a production bug here, before anything else. The Worker is `freeflow-edge`; every `console.log` line and every
+record above is kept by Workers Logs.
+
+- **Live** (what happens while it runs): from `packages/edge`,
+  `npx wrangler tail freeflow-edge --format json --search "[calendar]"`. `--search` filters on the text of a log line
+  (`[mail]`, `[calendar]`, a ray id); `--status error` shows only failed invocations. It runs until stopped.
+- **Stored** (the past): Cloudflare dashboard → Workers & Pages → freeflow-edge → Observability, with the search box or
+  the Query Builder on the fields (`perf = "request"`, `sync = "failed"`). From an agent session, the same queries go
+  through Cloudflare's observability MCP server (`https://observability.mcp.cloudflare.com/mcp`, signed in once with
+  the Cloudflare account). The `wrangler` sign-in cannot query stored logs: it has the tail scope only.
+
+Calendar sync records (from 2026-11-25), with ids only, never a calendar's name or an account's address:
+
+- `sync = failed`: one calendar's sync failed. `calendarId`, `accountId`, `kind`, `mode` (`delta`, `ctag`, `full`),
+  `ms`, `error`. The same run is in the Calendar object's own log, `GET /v1/calendar/debug/sync` (the last 50 runs).
+- `sync = delta_abandoned`: the server's answer to "what changed" could not be used (`reason`, `status`), so the
+  calendar was listed in full instead. Every minute on one calendar means its delta never works.
+- `sync = delta_pages`: the server cut a large answer short and it was read in `pages` requests.
+

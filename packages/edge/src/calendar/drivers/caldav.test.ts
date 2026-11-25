@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../errors';
 import { CalDav, googleOwnerAddress, parseScheduleResponse } from './caldav';
 
@@ -115,8 +115,13 @@ describe('the CalDAV driver, against a fake server', () => {
     expect(await d.changes(cal, 't1')).toEqual({ changed: [{ href: 'https://dav.example.com/ann/work/e1.ics', etag: '"2"' }], deleted: ['https://dav.example.com/ann/work/e2.ics'], token: 't3' });
     expect(seen.map((r) => /<[^>]*sync-token[^>]*>([^<]+)</.exec(r.body)?.[1])).toEqual(['t1', 't2']);
     // Cut short with the same token again, or the collection refused: a full listing.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await d.changes(cal, 'stuck')).toBeNull();
     expect(await d.changes(cal, 'refused')).toBeNull();
+    // Each is said in the logs, with the server's status and no address.
+    expect(warn.mock.calls.map((c) => c[0])).toMatchObject([{ sync: 'delta_abandoned', status: 507 }, { sync: 'delta_abandoned', reason: 'collection refused', status: 403 }]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('/ann/');
+    warn.mockRestore();
     // Never finishing: ten pages are kept with the last token, for the next sync to go on from.
     const part = await d.changes(cal, 'endless');
     expect(part?.changed).toHaveLength(10);

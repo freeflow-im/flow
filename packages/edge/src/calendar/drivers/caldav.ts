@@ -234,11 +234,11 @@ export class CalDav implements Driver {
     const self = href.replace(/\/$/, '');
     const changed = new Map<string, string>();
     const deleted = new Set<string>();
-    let at = token;
+    let at = token, pages = 0;
     for (let page = 0; page < MAX_SYNC_PAGES; page++) {
       const res = await syncCollection({ url: href, props: ETAG_PROPS, syncLevel: 1, syncToken: at, fetch: this.request });
       // A token the server no longer knows: 403 or 409 (valid-sync-token), or 400 on some servers; the caller lists all.
-      if (res.length === 1 && res[0].ok === false && [400, 403, 409, 410, 412, 507].includes(res[0].status ?? 0)) return null;
+      if (res.length === 1 && res[0].ok === false && [400, 403, 409, 410, 412, 507].includes(res[0].status ?? 0)) return abandoned('token refused', res[0].status);
       let next: string | null = null, more = false;
       for (const r of res) {
         next = textOf((r.raw as { multistatus?: { syncToken?: unknown } } | undefined)?.multistatus?.syncToken) ?? next;
@@ -247,21 +247,23 @@ export class CalDav implements Driver {
         if (abs.replace(/\/$/, '') === self) {
           // The collection itself with 507: the answer is cut short (RFC 6578 §3.6), and the rest comes from its token.
           if (r.status === 507) more = true;
-          else if (r.ok === false && r.status !== 404) return null;
+          else if (r.ok === false && r.status !== 404) return abandoned('collection refused', r.status);
           continue;
         }
         // An entry refused for another reason than "gone" (this failed a shared Google calendar every minute as "refused
         // the sync (207)", 2026-11-25): the delta cannot be trusted, so the caller lists all.
-        if (r.ok === false && r.status !== 404 && !abs.endsWith('.ics')) return null;
+        if (r.ok === false && r.status !== 404 && !abs.endsWith('.ics')) return abandoned('entry refused', r.status);
         const etag = textOf(r.props?.getetag);
         if (etag && r.status !== 404) { changed.set(abs, etag); deleted.delete(abs); }
         else { deleted.add(abs); changed.delete(abs); }
       }
       // Cut short with no new token to go on from: only a full listing can finish it.
-      if (more && (!next || next === at)) return null;
+      if (more && (!next || next === at)) return abandoned('cut short without a new token', 507);
       if (next) at = next;
       if (!more) break;
+      pages++;
     }
+    if (pages) console.log({ message: `[calendar] delta cut short by the server: ${pages + 1} pages read`, sync: 'delta_pages', pages: pages + 1, changed: changed.size, deleted: deleted.size });
     // Still cut short after MAX_SYNC_PAGES: what was read is kept with its token, and the next sync goes on from there.
     return { changed: [...changed].map(([h, etag]) => ({ href: h, etag })), deleted: [...deleted], token: at === token ? null : at };
   }
@@ -325,6 +327,15 @@ export class CalDav implements Driver {
     if (!res.ok) return null;
     return parseScheduleResponse(await res.text());
   }
+}
+
+/**
+ * A delta given up for a full listing, said in the logs (`sync = delta_abandoned`): the status is the server's, and no
+ * address is logged (a Google calendar's has the person's email in it).
+ */
+function abandoned(reason: string, status: number | undefined): null {
+  console.warn({ message: `[calendar] delta abandoned for a full listing: ${reason} (${status ?? 'no status'})`, sync: 'delta_abandoned', reason, status: status ?? null });
+  return null;
 }
 
 function refused(res: Response, body: string): ApiError {

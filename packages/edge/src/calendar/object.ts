@@ -569,6 +569,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
         throw err;
       } finally {
         this.store.logSync({ calendarId: c.id, at: started, ms: Date.now() - started, mode, changed, deleted, error });
+        // Workers Logs too (`sync = failed`): ids only, never the calendar's name or the account's address.
+        if (error) console.warn({ message: `[calendar] sync failed (${mode}): ${error}`, sync: 'failed', calendarId: c.id, accountId: acct.id, kind: acct.kind, mode, ms: Date.now() - started, error });
       }
     });
   }
