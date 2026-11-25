@@ -531,11 +531,16 @@ export function Room({ meetingRef }: { meetingRef: string }) {
     };
   }, [meetingRef, join]);
 
-  // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
+  // Closing or reloading the tab leaves too. RealtimeKit is told, so the others lose this tile at once: without it the
+  // old connection stays until RealtimeKit times it out, and a person who comes straight back shows twice. Our server
+  // hears it at once as well (a huddle's roster in Chat).
   useEffect(() => {
     mounted.current = true;
     const onClose = () => {
-      if (client.current?.self.roomJoined && info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
+      const c = client.current;
+      if (!c?.self.roomJoined) return;
+      void c.leave().catch(() => {});
+      if (info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
     };
     window.addEventListener('pagehide', onClose);
     return () => {
