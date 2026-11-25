@@ -35,7 +35,7 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useMembers, useSearch, useSharedCalendars } from './hooks/calendar';
 import { RESPONDED_TEXT, withMyResponse } from './lib/format';
 import { movePatch } from './lib/occurrences';
-import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
+import { neighbours, offsetOf, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
 import { parseCalendarLink, parseNewEvent, parseShareLink, withoutCalendarLink, withoutNewEvent, withoutShareLink } from './lib/deeplink';
 import { sharedPrefs } from './lib/prefs';
 import { asCalendar, errorText } from './lib/sharing';
@@ -362,7 +362,7 @@ export function App() {
               <SearchResults q={search} results={results.data ?? []} loading={results.isFetching} calendars={cals} onOpen={(o, el) => openEvent(o, { el })} onClose={() => { setSearch(''); setSearchText(''); }} />
             ) : (
               <>
-                <Toolbar title={titleOf(view, place.date, WEEK_STARTS_ON)} view={view} narrow={narrow} busy={events.isFetching && !events.data} onToday={today} onStep={go} onView={setView} onCalendars={() => setSidebarOpen(true)} />
+                <Toolbar title={titleOf(view, place.date, WEEK_STARTS_ON)} offset={offsetOf(view, place.date, new Date(), WEEK_STARTS_ON)} view={view} narrow={narrow} busy={events.isFetching && !events.data} onToday={today} onStep={go} onView={setView} onCalendars={() => setSidebarOpen(true)} />
                 <div className="min-h-0 flex-1">
                   <CalendarGrid
                     view={view} date={place.date} occurrences={occurrences} calendars={allCals ?? cals} weekStartsOn={WEEK_STARTS_ON} selecting={!!quick}
