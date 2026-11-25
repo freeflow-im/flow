@@ -284,7 +284,7 @@ Gmail-style threads, on the prefetch cache (below): every cached message has a `
   then INBOX), with its body from the cache; a message whose body is not cached yet comes without (`html`/`text` null,
   `bodyPending: true`; its `attachments` from the body plan) and is read in the background for the next ask. An unknown
   thread is `not_found`.
-- Searches and `unread=1` stay flat (`GET …/messages`); their rows carry `threadId` where the cache knows them, and the
+- Searches and `unread=1` stay flat (`GET …/messages`); their rows carry `threadId` where the cache knows them (`MailCache.threadIds`), and the
   client groups them. The agents' `search_mail` answers `thread_id` with each message.
 - Tests: `src/imap/threads.test.ts` (the rules), `cache.test.ts` ("MailCache threads": across folders and in either order,
   merging, the index after a trim, the subject fallback, paging) and `test/e2e-mail.mjs` ("Conversations": a thread across

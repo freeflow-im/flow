@@ -396,6 +396,7 @@ r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subj
 let t3;for(let i=0;i<20&&!t3;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});t3=r.j.messages?.find(m=>m.messageId===T3);if(!t3)await sleep(300);}
 await api(A.token,'GET',`${P}/messages?folder=Sent&limit=10`,undefined,{'x-mail-test-alarm':'1'});
 t('threads: the summaries carry the thread id',t1?.threadId&&t1.threadId===t2?.threadId&&t2.threadId===t3?.threadId,JSON.stringify([t1?.threadId,t2?.threadId,t3?.threadId]));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&q=${encodeURIComponent(TS)}`);{const hits=r.j.messages?.filter(m=>[T1,T2,T3].includes(m.messageId))??[];t('threads: a search\'s rows carry the thread id',hits.length===3&&hits.every(m=>m.threadId===t1?.threadId),JSON.stringify(hits.map(m=>m.threadId)));}
 let th=await cacheOf(()=>getRaw(`${P}/threads?folder=INBOX&limit=5`));
 const conv=th.j.threads?.find(x=>x.threadId===t1?.threadId);
 t('threads: a folder lists its conversations, newest first, from the cache',th.s===200&&th.j.threads?.length>0&&th.cache==='hit'&&th.j.threads.every((x,i)=>!i||th.j.threads[i-1].uid>x.uid)&&th.j.threads[0].threadId===conv?.threadId,th.s+' '+th.cache+' '+JSON.stringify(th.j.threads?.[0]).slice(0,120));

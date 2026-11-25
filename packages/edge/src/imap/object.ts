@@ -624,7 +624,10 @@ export class Mail extends DurableObject<MailEnv> {
       const page = found.slice(-limit);
       if (page.length) for await (const m of c.fetch(page.join(','), this.listQuery(tabs, gmail), { uid: true })) fetched.push(m);
       fetched.sort((a, b) => b.uid - a.uid);
-      const { messages } = await this.summarize(r, c, folder, tabs, gmail, fetched);
+      const { messages: summaries } = await this.summarize(r, c, folder, tabs, gmail, fetched);
+      // A match the cache has carries its conversation, so opening it shows the whole thread (the replies in Sent too).
+      const threads = this.cache.threadIds(r.id, folder, this.validity(c), summaries.map((m) => m.uid));
+      const messages = summaries.map((m) => { const threadId = threads.get(m.uid); return threadId ? { ...m, threadId } : m; });
       return { messages, next: more && messages.length ? messages[messages.length - 1].uid : null };
     });
   }

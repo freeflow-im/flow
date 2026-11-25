@@ -303,6 +303,17 @@ describe('MailCache threads', () => {
     expect(threadOf(cache, 2)).toBe(before);
   });
 
+  it('tells the threads of some messages of a folder: what a search adds to its rows', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'Plans' }), withRefs(2, { subject: 'Re: Plans', inReplyTo: 1, references: [1] }), withRefs(3, { subject: 'Other' })]);
+    const ids = cache.threadIds(A, F, V, [1, 2, 3, 99]);
+    expect([...ids.keys()].sort()).toEqual([1, 2, 3]);
+    expect(ids.get(1)).toBe(ids.get(2));
+    expect(ids.get(3)).not.toBe(ids.get(1));
+    // Another folder's, or another generation of the folder's, are not this folder's messages.
+    expect(cache.threadIds(A, 'Sent', V, [1]).size).toBe(0);
+    expect(cache.threadIds(A, F, 'other', [1]).size).toBe(0);
+  });
+
   it('merges two threads a message links, and remembers threads of rows that left', () => {
     const cache = cacheWith([withRefs(1, { subject: 'A' }), withRefs(2, { subject: 'B' })]);
     const [a, b] = [threadOf(cache, 1), threadOf(cache, 2)];

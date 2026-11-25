@@ -548,6 +548,17 @@ export class MailCache {
     return this.sql.exec<{ thread_id: string | null }>('SELECT thread_id FROM mail_messages WHERE account_id = ? AND folder = ? AND uid = ?', accountId, folder, uid).toArray()[0]?.thread_id ?? null;
   }
 
+  /** The threads of these messages of a folder, for those the cache has (a search's rows, which are not read from it). */
+  threadIds(accountId: string, folder: string, validity: string, uids: readonly number[]): Map<number, string> {
+    const out = new Map<number, string>();
+    for (const part of chunks(uids)) {
+      for (const r of this.sql.exec<{ uid: number; thread_id: string }>(
+        'SELECT uid, thread_id FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND thread_id IS NOT NULL AND uid IN (SELECT value FROM json_each(?))',
+        accountId, folder, validity, JSON.stringify(part)).toArray()) out.set(r.uid, r.thread_id);
+    }
+    return out;
+  }
+
   /** A message as a thread's reading shows it when its body is not cached: the detail from the row, without bodies. */
   pendingDetail(accountId: string, folder: string, uid: number): Omit<MessageDetail, 'html' | 'text'> | null {
     const r = this.sql.exec<{ summary: string; headers: string | null; plan: string | null; seen: number; flagged: number; answered: number }>(
