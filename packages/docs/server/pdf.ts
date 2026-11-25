@@ -157,6 +157,30 @@ const MAX_RESOURCE_BYTES = 20 * 1024 * 1024;
 /** Renders at once; the rest wait their turn. */
 const MAX_RENDERS = 2;
 
+/** What the page is asked, as text: see `untilDrawn`. */
+export const PRINT_READY = 'window.__printReady === true';
+
+/**
+ * Waits for the page to say it is drawn (client/src/print.ts). It asks with a string, again and again, and not with
+ * `page.waitForFunction`: that sends a function of Playwright's own to the page as its source text, and the Worker's
+ * build is minified, so that text calls a helper (esbuild's `__name`, renamed) the page does not have. A string is
+ * sent as it is. An answer that fails (the page is between two addresses) is asked for again; when time runs out, the
+ * last failure is the reason given.
+ */
+export async function untilDrawn(page: { evaluate(expression: string): Promise<unknown> }, timeoutMs: number, everyMs = 100): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let failure: string | null = null;
+  for (;;) {
+    try {
+      if ((await page.evaluate(PRINT_READY)) === true) return;
+      failure = null;
+    } catch (e) {
+      failure = e instanceof Error ? e.message.split('\n')[0] : String(e);
+    }
+    if (Date.now() >= deadline) throw new PrintError(`The PDF could not be made: ${failure ?? 'the page took too long to be drawn.'}`);
+    await new Promise((resolve) => setTimeout(resolve, everyMs));
+  }
+}
 
 /**
  * Chromium driven by Playwright: the hosted app's and `npm run dev`'s renderer. One browser is started on the
@@ -214,7 +238,7 @@ export class PlaywrightRenderer implements PdfRenderer {
           context,
           async (page) => {
             await page.goto(url, { waitUntil: 'domcontentloaded' });
-            await page.waitForFunction(() => (window as { __printReady?: boolean }).__printReady === true, null, { timeout: opts.timeoutMs });
+            await untilDrawn(page, opts.timeoutMs);
           },
           opts,
         );

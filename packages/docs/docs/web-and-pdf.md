@@ -78,7 +78,9 @@ out as File › Print does (documents in Pages mode as `DocPrint`'s pages, prese
 slides, Markdown as its preview, shown whatever the user's preference), with the print styles hiding the
 rest, and never asks to print. When everything is drawn (fonts loaded, pictures decoded, Mermaid diagrams
 drawn) it sets `window.__printReady = true`; the renderer waits for that, not for a delay. So the PDF is
-always what Print makes, from the same code.
+always what Print makes, from the same code. The renderer asks for it with a string (`untilDrawn` in
+`server/pdf.ts`), never with `page.waitForFunction`: in the Worker's minified build, the code that call sends to
+the page calls a renamed helper the page does not have.
 
 **How the headless browser is let in.** It loads the print view from the server's own address on loopback,
 without the user's session. The server makes a print ticket for the request: a random token, kept in memory
