@@ -1,9 +1,11 @@
 // /mail/compose: Mail's composer alone, for another app to show beside itself (Calendar's event: an email to a guest).
-// It is filled from `?mailto=` (RFC 6068, @flow/shared createAddress('mail')), sends from the account Mail last showed
+// It is filled from `?mailto=` (RFC 6068, @flow/shared createAddress('mail')) and `?docs=` (Docs files to add: Docs'
+// File > Send as email), sends from the account Mail last showed
 // (else the organization's mailbox, else the first), and tells the page around it when it is done, sent or not, with
 // `{ type: 'flow:compose:done', sent }`. While it sends the form stays, hidden, so a failure gives it back as it was.
 import { useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { mailDocsOf } from '@flow/suite-bar';
 import { mailApi, setMailWorkspace } from './api';
 import { ComposeForm, type ComposerHandle } from './components/ComposeForm';
 import { useAccounts } from './hooks/mail';
@@ -32,7 +34,11 @@ export function ComposePage() {
   const org = useOrganizations().activeId;
   setMailWorkspace(org);
   const accounts = useAccounts();
-  const [request] = useState<ComposeRequest>(() => ({ mode: 'new', draft: draftFromMailto(new URLSearchParams(window.location.search).get('mailto') ?? '') ?? emptyDraft() }));
+  const [request] = useState<ComposeRequest>(() => {
+    const q = new URLSearchParams(window.location.search);
+    const docs = mailDocsOf(q.get('docs'));
+    return { mode: 'new', draft: draftFromMailto(q.get('mailto') ?? '') ?? emptyDraft(), ...(docs.length ? { docs } : {}) };
+  });
   const form = useRef<ComposerHandle | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sending, setSending] = useState(false);

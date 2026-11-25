@@ -4,7 +4,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import { isInHome, useHomeMenu } from '@flow/suite-bar';
+import { isInHome, mailDocsOf, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, AssistantDockScope, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { SidePanel, sidePanelsOf } from '@flow/suite-bar/side-panel';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type CodeAlert, type MailAccount, type MessageDetail, type ThreadDetail, type ThreadMessage, type ThreadSummary, type TabStatus } from './api';
@@ -473,9 +473,11 @@ export function App() {
     if (!href || !account) return;
     mailtoAsked.current = null;
     const draft = draftFromMailto(href);
-    if (draft) openCompose(account.id, { mode: 'new', draft });
+    const docs = mailDocsOf(initialParam('docs'));
+    if (draft) openCompose(account.id, { mode: 'new', draft, ...(docs.length ? { docs } : {}) });
     const url = new URL(window.location.href);
     url.searchParams.delete('mailto');
+    url.searchParams.delete('docs');
     window.history.replaceState(window.history.state, '', url);
   }, [account, openCompose]);
   /** A panel (Calendar's event, an address in it) asks for a new email: this Mail's composer, not a page load. */
@@ -484,7 +486,8 @@ export function App() {
     const mailto = url.pathname.replace(/\/+$/, '') === '/mail' ? url.searchParams.get('mailto') : null;
     const draft = mailto ? draftFromMailto(mailto) : null;
     if (!draft || !account) return false;
-    openCompose(account.id, { mode: 'new', draft });
+    const docs = mailDocsOf(url.searchParams.get('docs'));
+    openCompose(account.id, { mode: 'new', draft, ...(docs.length ? { docs } : {}) });
     return true;
   }, [account, openCompose]);
 

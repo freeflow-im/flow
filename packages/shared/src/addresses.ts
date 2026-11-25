@@ -157,8 +157,51 @@ export type Attendee = string | { email: string; name?: string | null };
 export interface CreateFields {
   calendar: { title?: string; attendees?: readonly Attendee[]; start?: string };
   'chat-message': { channel: string; text?: string };
-  /** A new email: Mail's composer, filled in (a `mailto:` link, RFC 6068). */
-  mail: { to: readonly Attendee[]; subject?: string; body?: string };
+  /** A new email: Mail's composer, filled in (a `mailto:` link, RFC 6068), with Docs files added (`docs`). */
+  mail: { to: readonly Attendee[]; subject?: string; body?: string; docs?: readonly MailDocsFile[] };
+}
+
+/** A Docs file added to a new email (Docs' File > Send as email): what Mail's composer needs to fetch it, or to link it. */
+export interface MailDocsFile {
+  kind: 'doc' | 'sheet' | 'deck' | 'markdown' | 'whiteboard' | 'file';
+  id: string;
+  name: string;
+  /** The folder it is in ('' at the top). */
+  folder: string;
+  /** One of the organization's shared files rather than one of the person's own. */
+  shared: boolean;
+  /** A stored file's type and size. */
+  type?: string;
+  size?: number;
+  /** A spreadsheet kept as a CSV file. */
+  format?: string;
+}
+
+const MAIL_DOCS_KINDS: readonly string[] = ['doc', 'sheet', 'deck', 'markdown', 'whiteboard', 'file'];
+
+/** The Docs files a new email's address names (its `docs=`, as `createAddress('mail')` writes it); none for anything else. */
+export function mailDocsOf(param: string | null): MailDocsFile[] {
+  if (!param) return [];
+  let v: unknown;
+  try {
+    v = JSON.parse(param);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((d: Partial<MailDocsFile> | null): MailDocsFile[] => {
+    if (!d || typeof d.id !== 'string' || !d.id || typeof d.name !== 'string' || typeof d.kind !== 'string' || !MAIL_DOCS_KINDS.includes(d.kind)) return [];
+    return [{
+      kind: d.kind,
+      id: d.id,
+      name: d.name,
+      folder: typeof d.folder === 'string' ? d.folder : '',
+      shared: d.shared === true,
+      ...(typeof d.type === 'string' ? { type: d.type } : {}),
+      ...(typeof d.size === 'number' ? { size: d.size } : {}),
+      ...(typeof d.format === 'string' ? { format: d.format } : {}),
+    }];
+  });
 }
 
 /** A `mailto:` link (RFC 6068) to the people, with a subject and body. */
@@ -175,13 +218,14 @@ export function mailtoOf(to: readonly Attendee[], subject?: string, body?: strin
 /**
  * The address that asks an app to create something: Calendar's `/calendar/?new=<title>&guests=Name <a@x>,b@y&start=`
  * (packages/calendar lib/deeplink.ts reads it), Chat's `/chat/?open=channel:<id>&text=<text>`, Mail's
- * `/mail/?mailto=<mailto: link>` (its composer opens with it).
+ * `/mail/?mailto=<mailto: link>&docs=<files as JSON>` (its composer opens with it; `/mail/compose?…` is the composer alone).
  */
 export function createAddress<K extends keyof CreateFields>(what: K, fields: CreateFields[K]): string {
   const q = new URLSearchParams();
   if (what === 'mail') {
     const f = fields as CreateFields['mail'];
     q.set('mailto', mailtoOf(f.to, f.subject, f.body));
+    if (f.docs?.length) q.set('docs', JSON.stringify(f.docs));
     return `/mail/?${q}`;
   }
   if (what === 'chat-message') {

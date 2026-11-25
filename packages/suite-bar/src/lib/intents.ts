@@ -6,8 +6,8 @@ import type { Reference } from '@flow/shared';
 import { addressOf, adminAddress, CHAT_PAGES, chatPageAddress, createAddress, settingsAddress, shareAddressOf, type AdminSection, type ChatPage, type CreateFields, type ReferenceTarget, type SettingsSection } from '@flow/shared/addresses';
 import { isInHome, openInHome } from './embed';
 
-export { addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, SETTINGS_SECTIONS } from '@flow/shared/addresses';
-export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference, SettingsSection } from '@flow/shared/addresses';
+export { addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, mailDocsOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, SETTINGS_SECTIONS } from '@flow/shared/addresses';
+export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, MailDocsFile, ReferenceTarget, ResolvedReference, SettingsSection } from '@flow/shared/addresses';
 
 /** How an intent is followed: in this tab (the default), a new one, or by the caller (an app's own router, a test). */
 export interface IntentOptions { newTab?: boolean; navigate?: (url: string) => void }

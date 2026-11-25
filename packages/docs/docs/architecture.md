@@ -363,7 +363,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   reads each open folder's subfolders with `api.library` and again on `FOLDERS_CHANGED` (the home page sends it after a change), and on a
   file's page selects the folder it was opened from (`listing.ts`' `last`); so the home page has no `RootSwitch` or Recents/Favorites
   tabs there (`FileLibrary`'s `listTabs={false}`, `RootSwitch` only outside the suite), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
-  Move to organization… (a picker of the user's other organizations).
+  Move to organization… (a picker of the user's other organizations), and the File menu's Send as email: Mail's composer
+  (`/mail/compose`) in `@flow/suite-bar`'s `ComposeDrawer`, with the file added by `createAddress('mail', { docs })` (`sendAsEmail.ts`).
   Since platform phase 3.2 access is on grants (`server/access.ts`, the `grants` table of `@flow/shared/grants`): objects are `sheet`, `file`
   and `folder` (named `<scopeKey>/<path>`, `folderObjectId`; folders have no id), a file's chain is itself then each folder up to its root's
   top, and `roleOf` is `owner` for the owner column, else (for a member of the row's organization) `effectiveRole` over the chain's grants,
