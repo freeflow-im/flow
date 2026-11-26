@@ -251,6 +251,8 @@ export interface FileLibraryProps {
   onDragOut?(item: LibraryItem): void;
   /** Put a file in another folder. Lets a file be dragged onto a folder in the list or in the breadcrumbs. */
   onMove?(item: LibraryItem, folder: string): Promise<void>;
+  /** A file of the list starts being dragged (to a folder, with onMove), or stops (null): for a folder tree beside the list to take it. */
+  onDragFile?(item: LibraryItem | null): void;
   /**
    * Look for the search text in every folder, not just the one being shown. Adds a "Find files" button
    * under the filtered list; its results replace the list until the search text changes.
@@ -474,10 +476,12 @@ export function FileLibrary(props: FileLibraryProps) {
             }
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', s.title);
+            props.onDragFile?.(s);
           },
           onDragEnd: () => {
             dragged.current = null;
             setDropFolder(null);
+            props.onDragFile?.(null);
           },
         }
       : {};

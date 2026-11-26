@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Dragging a file onto a folder of the Docs folder tree is on web and desktop only (2026-11-26, Taskboard task 53).** The tree is the suite's Docs panel, which macOS and iOS open in the browser (deliberate, as for the rest of Docs).
 - **Pinning a participant in a meeting is on web and desktop only (2026-11-26, Taskboard task 49).** The pin button is on the Meet room's tiles, which macOS and iOS open in the browser (closes with Meet phase 6, native call screens).
 - **The floating New message button over Mail's list is on web and desktop only (2026-11-26, Taskboard task 51).** Mail is web only; macOS and iOS have no Mail (deliberate).
 - **Choosing the camera, microphone and speaker for a meeting is on web and desktop only (2026-11-25, Taskboard task 48).** The pickers are on the Meet check screen and in the room, which macOS and iOS open in the browser; Safari (including iOS) has no speaker choice, so the Speaker picker is hidden there (closes with Meet phase 6, native call screens).

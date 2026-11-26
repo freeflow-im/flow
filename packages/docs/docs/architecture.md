@@ -390,7 +390,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   (`LocalFolders`). The home page lists one folder through `GET /api/library?folder=`; a request that
   names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
   `GET /api/folders/download?folder=` is a folder as a zip (`exportFolder` in `server/export.ts`), and a file
-  dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`).
+  dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`). In the suite it can
+  also be dropped on a folder of the same root in the left tree (`DocsNav`): the list names the file it is dragging in
+  `libraryDrag.ts` (`onDragFile`), the tree moves it and sends `FILE_MOVED`, and the home page reads the list again.
   The assistant's folder tools (`list_folder`, `create_folder`, `move_file`, `delete_folder`; `runFolderTool` in
   `server/agent/tools.ts`) call the stores in-process, and in the suite the same routes over HTTP (edge `assistant/docsTools.ts`).
 - The thumbnail view (`FileLibrary`'s `view`, `FileThumb.tsx`): pictures show themselves, videos a frame, PDFs their first
