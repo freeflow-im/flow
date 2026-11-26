@@ -381,8 +381,11 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
   // PDF by the server (print.ts), the page is laid out once the fonts are in and says when it is drawn instead.
   useEffect(() => {
     if (!printingPdf()) return;
+    // Printing hides the editor, so the pages must be measured first (up to 5 s, then as they are).
     let t: ReturnType<typeof setTimeout> | undefined;
-    void document.fonts.ready.then(() => (t = setTimeout(() => setPrinting(true), 50)));
+    const deadline = Date.now() + 5000;
+    const start = () => (t = setTimeout(() => (ctl.paginated() || Date.now() > deadline ? setPrinting(true) : start()), 50));
+    void document.fonts.ready.then(start);
     return () => clearTimeout(t);
   }, []);
   useEffect(() => {

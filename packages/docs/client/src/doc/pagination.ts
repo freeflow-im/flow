@@ -283,6 +283,9 @@ export function paginationPlugin(): Plugin<PaginationState> {
       };
       const measure = () => {
         if (disposed || !view.dom.isConnected) return;
+        // A hidden editor (printing in Pages mode hides it and prints copies of its pages, DocPrint) measures as
+        // nothing; keep the last pages rather than fold the document onto one.
+        if (!view.dom.getClientRects().length) return;
         const setup = pageSetupOf(view.state.doc);
         const prev = paginationOf(view.state);
         if (setup.mode !== 'pages') {
