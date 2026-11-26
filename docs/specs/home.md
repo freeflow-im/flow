@@ -55,7 +55,7 @@ in the app itself.
 
 | App | Menu |
 |---|---|
-| Mail | New message; Inbox; Drafts. The accounts and Add account are the picker on the Mail row, labelled with the inbox's address, even with one account |
+| Mail | New message; Inbox; Drafts; Sent. The accounts and Add account are the picker on the Mail row, labelled with the inbox's address, even with one account |
 | Docs | New document, Recents, Favorites, Shared with me |
 | Calendar | New event, Today |
 | Admin | its sections |
