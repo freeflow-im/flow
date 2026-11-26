@@ -2,12 +2,13 @@
 // joins as a guest with a name (phase 3, ruling R2). Both go through the check screen first, except a huddle opened from
 // Chat, which joins straight in. Then everyone is in a grid (a shared screen large, with people in a strip), with the
 // controls (mic, camera, share, people, chat, leave) and a side panel with People and Chat tabs (the Chat tab is Chat's
-// own page in a frame: lib/chat.ts). Built on the RealtimeKit core SDK with our own
+// own page in a frame: lib/chat.ts). Any tile or shared screen can be pinned to fill the stage, with the other views in a
+// strip of small squares (lib/stage.ts). Built on the RealtimeKit core SDK with our own
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
 import { playJoinChime } from '../lib/chime';
-import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Settings, Square, Users, Video, VideoOff, X } from 'lucide-react';
+import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Pin, PinOff, Settings, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { SendAgent } from './SendAgent';
@@ -19,6 +20,7 @@ import { AutoClose } from './AutoClose';
 import { useMediaQuery, useResizableWidth } from '../hooks/layout';
 import { pickDevice, rememberDevice, rememberedDevices, routeToSpeaker, useDeviceLists, type DeviceChoice, type DeviceKind } from '../lib/devices';
 import { DevicePickers, TestSpeaker } from './DevicePickers';
+import { keepPin, sameView, stageLayout, type Pin as PinChoice, type View } from '../lib/stage';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
@@ -173,7 +175,37 @@ export function Avatar({ person, className }: { person: Pick<Person, 'name' | 'i
   );
 }
 
-function Tile({ person, self, speaking, small }: { person: Person; self: boolean; speaking: boolean; small?: boolean }) {
+/** Where a view is drawn: a cell of the even grid, the stage's one large view, or a small square in the strip. */
+type ViewSize = 'grid' | 'main' | 'strip';
+
+const VIEW_SIZE: Record<ViewSize, string> = {
+  grid: 'min-h-0 min-w-0',
+  main: 'min-h-0 min-w-0 flex-1',
+  strip: 'size-24 flex-none sm:size-32',
+};
+
+/**
+ * Pins a view to the stage, or unpins it. It shows on hover or focus (always on a touch screen, and while pinned), so the
+ * tiles stay clean.
+ */
+export function PinButton({ name, pinned, onClick }: { name: string; pinned: boolean; onClick: () => void }) {
+  const label = pinned ? `Unpin ${name}` : `Pin ${name}`;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pinned}
+      onClick={onClick}
+      className={`absolute right-2 top-2 z-10 flex size-8 cursor-pointer items-center justify-center rounded-full border-0 text-white focus-visible:opacity-100 pointer-coarse:opacity-100 ${pinned ? 'bg-[#8ab4f8] text-[#202124] opacity-100' : 'bg-black/55 opacity-0 hover:bg-black/75 group-hover:opacity-100'}`}
+    >
+      {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+    </button>
+  );
+}
+
+function Tile({ person, self, speaking, size = 'grid', pinned, onPin }: { person: Person; self: boolean; speaking: boolean; size?: ViewSize; pinned?: boolean; onPin?: () => void }) {
+  const small = size === 'strip';
   const video = useRef<HTMLVideoElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const speakerId = useContext(SpeakerContext);
@@ -195,32 +227,36 @@ function Tile({ person, self, speaking, small }: { person: Person; self: boolean
   const label = self ? 'You' : person.name;
   return (
     <div
-      className={`relative flex items-center justify-center overflow-hidden rounded-xl bg-[#3c4043] ${small ? 'aspect-video w-48 flex-none' : 'min-h-0 min-w-0'} ${speaking ? 'shadow-[inset_0_0_0_3px_#8ab4f8]' : ''}`}
+      data-testid={`tile-${person.id}`}
+      className={`group relative flex items-center justify-center overflow-hidden rounded-xl bg-[#3c4043] ${VIEW_SIZE[size]} ${speaking ? 'shadow-[inset_0_0_0_3px_#8ab4f8]' : ''}`}
     >
+      {onPin && <PinButton name={label} pinned={!!pinned} onClick={onPin} />}
       {person.videoEnabled ? (
         <video ref={video} autoPlay playsInline muted className={`size-full object-cover ${self ? '-scale-x-100' : ''}`} />
       ) : (
         <Avatar person={person} className={small ? 'size-12 text-base' : 'size-20 text-3xl'} />
       )}
       {!self && <audio ref={audio} autoPlay />}
-      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">
-        {!person.audioEnabled && <MicOff size={13} className="text-[#f28b82]" aria-label="Muted" />}
-        {label}
+      <span className="absolute bottom-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">
+        {!person.audioEnabled && <MicOff size={13} className="flex-none text-[#f28b82]" aria-label="Muted" />}
+        <span className="truncate">{label}</span>
       </span>
     </div>
   );
 }
 
-function ScreenShare({ person }: { person: Person }) {
+function ScreenShare({ person, size = 'main', pinned, onPin }: { person: Person; size?: ViewSize; pinned?: boolean; onPin?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const track = person.screenShareTracks?.video;
   useEffect(() => {
     if (ref.current) ref.current.srcObject = track ? new MediaStream([track]) : null;
   }, [track]);
+  const label = `${person.name}’s screen`;
   return (
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-black">
+    <div className={`group relative flex items-center justify-center overflow-hidden rounded-xl bg-black ${VIEW_SIZE[size]}`}>
+      {onPin && <PinButton name={label} pinned={!!pinned} onClick={onPin} />}
       <video ref={ref} autoPlay playsInline muted className="size-full object-contain" />
-      <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">{person.name}’s screen</span>
+      <span className={`absolute left-2 max-w-[calc(100%-16px)] truncate rounded-md bg-black/55 px-2 py-0.5 text-xs text-white ${size === 'strip' ? 'bottom-2' : 'top-2'}`}>{label}</span>
     </div>
   );
 }
@@ -319,6 +355,35 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
   const presenter = everyone.find((p) => p.screenShareEnabled);
   const cols = everyone.length <= 1 ? 1 : everyone.length <= 4 ? 2 : everyone.length <= 9 ? 3 : 4;
   const rows = Math.ceil(everyone.length / cols);
+  // The view this person pinned to the stage (lib/stage.ts): it follows someone who rejoins and is dropped when they leave.
+  const [chosenPin, setPin] = useState<PinChoice>(null);
+  const ids = everyone.map((p) => p.id);
+  const presenterId = presenter?.id ?? null;
+  const pin = keepPin(chosenPin, ids, presenterId, replaced);
+  useEffect(() => {
+    if (pin !== chosenPin) setPin(pin);
+  }, [pin, chosenPin]);
+  const layout = stageLayout(ids, presenterId, pin);
+  const togglePin = (v: View) => setPin((cur) => (sameView(cur, v) ? null : v));
+  const byId = new Map(everyone.map((p) => [p.id, p]));
+  // Pinning only means something with someone else in the room, or a screen shared.
+  const pinnable = everyone.length > 1 || !!presenter;
+  const drawView = (v: View, size: ViewSize) => {
+    const p = byId.get(v.id)!;
+    const pinned = sameView(pin, v);
+    if (v.kind === 'screen') return <ScreenShare key={`screen:${v.id}`} person={p} size={size} pinned={pinned} onPin={() => togglePin(v)} />;
+    return (
+      <Tile
+        key={`person:${v.id}`}
+        person={p}
+        self={p === self}
+        speaking={p.id === speaker && p.audioEnabled}
+        size={size}
+        pinned={pinned}
+        onPin={pinnable ? () => togglePin(v) : undefined}
+      />
+    );
+  };
 
   useEffect(() => {
     const onLeave = () => onLeft();
@@ -430,21 +495,20 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
 
       <div className="flex min-h-0 flex-1 gap-3 px-3 pb-3">
         <section className="flex min-w-0 flex-1 flex-col gap-2.5" aria-label="People in the meeting">
-          {presenter ? (
+          {layout.kind === 'focus' ? (
+            // One view (the pinned one, else a shared screen) fills the stage; the others are small squares under it.
             <>
-              <ScreenShare person={presenter} />
-              <div className="flex flex-none gap-2.5 overflow-x-auto">
-                {everyone.map((p) => (
-                  <Tile key={p.id} person={p} self={p === self} speaking={p.id === speaker && p.audioEnabled} small />
-                ))}
-              </div>
+              {drawView(layout.main, 'main')}
+              {layout.strip.length > 0 && (
+                <div className="flex flex-none gap-2.5 overflow-x-auto [&>:first-child]:ml-auto [&>:last-child]:mr-auto" data-testid="stage-strip">
+                  {layout.strip.map((v) => drawView(v, 'strip'))}
+                </div>
+              )}
             </>
           ) : (
             // Every cell fits the window: equal rows and columns share the stage, and each video fills its cell.
             <div className="grid min-h-0 flex-1 gap-2.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
-              {everyone.map((p) => (
-                <Tile key={p.id} person={p} self={p === self} speaking={p.id === speaker && p.audioEnabled} />
-              ))}
+              {layout.people.map((id) => drawView({ kind: 'person', id }, 'grid'))}
             </div>
           )}
         </section>
