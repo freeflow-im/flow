@@ -4,10 +4,10 @@
 // controls (mic, camera, share, people, chat, leave) and a side panel with People and Chat tabs (the Chat tab is Chat's
 // own page in a frame: lib/chat.ts). Built on the RealtimeKit core SDK with our own
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
 import { playJoinChime } from '../lib/chime';
-import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Square, Users, Video, VideoOff, X } from 'lucide-react';
+import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Settings, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { SendAgent } from './SendAgent';
@@ -17,9 +17,20 @@ import { ALIVE, guestKey, lastPeer, notePeer, readRejoin, REPLACES, withoutRepla
 import { ChatFrame } from './ChatFrame';
 import { AutoClose } from './AutoClose';
 import { useMediaQuery, useResizableWidth } from '../hooks/layout';
+import { pickDevice, rememberDevice, rememberedDevices, routeToSpeaker, useDeviceLists, type DeviceChoice, type DeviceKind } from '../lib/devices';
+import { DevicePickers, TestSpeaker } from './DevicePickers';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
+
+/** The speaker the room's sound plays on (lib/devices.ts); undefined is the browser's default. */
+const SpeakerContext = createContext<string | undefined>(undefined);
+
+/** Switches this person's camera or microphone in RealtimeKit to a device by id; a device that is gone is skipped. */
+async function switchInput(self: RTKSelf, kind: 'videoinput' | 'audioinput', id: string): Promise<void> {
+  const device = await self.getDeviceById(id, kind === 'videoinput' ? 'video' : 'audio').catch(() => null);
+  if (device) await self.setDevice(device);
+}
 
 /** Who is joining which room: a member (`meeting` set) or a guest (only the link's preview). */
 interface Entry {
@@ -165,6 +176,10 @@ export function Avatar({ person, className }: { person: Pick<Person, 'name' | 'i
 function Tile({ person, self, speaking, small }: { person: Person; self: boolean; speaking: boolean; small?: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
+  const speakerId = useContext(SpeakerContext);
+  useEffect(() => {
+    if (audio.current) routeToSpeaker(audio.current, speakerId);
+  }, [speakerId]);
   useEffect(() => {
     const el = video.current;
     if (!el || !person.videoEnabled) return;
@@ -316,6 +331,38 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
     fn().catch((e: unknown) => setMediaError(`Could not ${what}: ${e instanceof Error ? e.message : String(e)}`));
   };
 
+  // Camera, microphone and speaker (lib/devices.ts): the lists follow devices being plugged in and out.
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const lists = useDeviceLists();
+  const [chosenSpeaker, setChosenSpeaker] = useState(() => rememberedDevices().audiooutput);
+  const current = self.getCurrentDevices();
+  const inUse: DeviceChoice = {
+    videoinput: current.video?.deviceId ?? pickDevice(lists.videoinput, undefined),
+    audioinput: current.audio?.deviceId ?? pickDevice(lists.audioinput, undefined),
+    audiooutput: pickDevice(lists.audiooutput, chosenSpeaker),
+  };
+  const chooseDevice = (kind: DeviceKind, id: string) => {
+    rememberDevice(kind, id);
+    if (kind === 'audiooutput') return setChosenSpeaker(id);
+    act(kind === 'videoinput' ? 'switch the camera' : 'switch the microphone', () => switchInput(self, kind, id));
+  };
+  // A device plugged in or out: when the camera or microphone in use is gone, move to the remembered one or the
+  // default; when the remembered one comes back, go back to it.
+  useEffect(() => {
+    const now = self.getCurrentDevices();
+    const remembered = rememberedDevices();
+    for (const [kind, cur] of [
+      ['audioinput', now.audio?.deviceId],
+      ['videoinput', now.video?.deviceId],
+    ] as const) {
+      const list = lists[kind];
+      if (list.length === 0) continue;
+      const want = pickDevice(list, remembered[kind]);
+      const gone = !!cur && !list.some((d) => d.id === cur);
+      if (want && cur !== want && (gone || want === remembered[kind])) void switchInput(self, kind, want).catch(() => {});
+    }
+  }, [self, lists]);
+
   const started = useMemo(() => Date.now(), []);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -325,7 +372,8 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
   const minutes = Math.floor((now - started) / 60_000);
 
   return (
-    <div className="flex h-full flex-col bg-[#202124] text-[#e8eaed]">
+    <SpeakerContext.Provider value={inUse.audiooutput}>
+    <div className="relative flex h-full flex-col bg-[#202124] text-[#e8eaed]">
       <header className="flex h-14 flex-none flex-wrap items-center gap-3 px-5">
         {!info.guest && (
           <>
@@ -466,6 +514,24 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
         )}
       </div>
 
+      {devicesOpen && (
+        <div
+          role="dialog"
+          aria-label="Audio and video settings"
+          className="absolute bottom-22 left-1/2 z-20 flex w-[min(640px,calc(100%-24px))] -translate-x-1/2 flex-col gap-3 rounded-xl bg-[#2d2e30] p-4 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold">Audio and video</span>
+            <button type="button" aria-label="Close" onClick={() => setDevicesOpen(false)} className="flex cursor-pointer border-0 bg-transparent p-1 text-[#bdc1c6] hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <DevicePickers lists={lists} value={inUse} onChange={chooseDevice} />
+          <div className="flex justify-end">
+            <TestSpeaker speaker={inUse.audiooutput} />
+          </div>
+        </div>
+      )}
       <footer className="flex h-20 flex-none flex-wrap items-center justify-center gap-2.5 px-5">
         <ControlButton label={self.audioEnabled ? 'Mute' : 'Unmute'} danger={!self.audioEnabled} onClick={() => act('change the microphone', () => (self.audioEnabled ? self.disableAudio() : self.enableAudio()))}>
           {self.audioEnabled ? <Mic size={22} /> : <MicOff size={22} />}
@@ -475,6 +541,9 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
         </ControlButton>
         <ControlButton label={self.screenShareEnabled ? 'Stop sharing' : 'Share screen'} on={self.screenShareEnabled} onClick={() => act('share the screen', () => (self.screenShareEnabled ? self.disableScreenShare() : self.enableScreenShare()))}>
           <MonitorUp size={22} />
+        </ControlButton>
+        <ControlButton label="Audio and video settings" on={devicesOpen} onClick={() => setDevicesOpen((o) => !o)}>
+          <Settings size={22} />
         </ControlButton>
         {/* Anyone in the room who is a member can record (ruling R8); a guest sees the badge only. */}
         {!info.guest && (
@@ -504,6 +573,7 @@ function InRoom({ client, info, replaces, onLeft }: { client: Client; info: Room
         </button>
       </footer>
     </div>
+    </SpeakerContext.Provider>
   );
 }
 
@@ -534,6 +604,12 @@ export function Room({ meetingRef }: { meetingRef: string }) {
       // The browser may now ask for the microphone or camera; the page says so instead of only "Joining…".
       setPhase({ kind: 'joining', media: choice.audio || choice.video });
       const c = await RealtimeKitClient.init({ authToken, defaults: { audio: choice.audio, video: choice.video } });
+      // The camera and microphone chosen on the check screen, or last time (a huddle skips the check screen).
+      const devices = choice.devices ?? rememberedDevices();
+      for (const kind of ['audioinput', 'videoinput'] as const) {
+        const id = devices[kind];
+        if (id) await switchInput(c.self, kind, id).catch(() => {});
+      }
       await c.join();
       if (!mounted.current) return void c.leave().catch(() => {});
       client.current = c;
