@@ -123,6 +123,18 @@ describe('organization files in the hosted app', () => {
     expect((await host.inject({ method: 'GET', url, headers: { 'x-user': 'dave' } })).statusCode).toBe(404);
   });
 
+  it("moves a stored file from a sub-folder to another folder in a second organization's My files", async () => {
+    await call('alice', 'POST', '/api/folders', { name: 'Records', workspace: 'juniper' });
+    await call('alice', 'POST', '/api/folders', { name: 'Scans', folder: 'Records', workspace: 'juniper' });
+    await call('alice', 'POST', '/api/folders', { name: 'Finance', workspace: 'juniper' });
+    const res = await host.inject({ method: 'POST', url: '/api/files?folder=Records%2FScans&workspace=juniper', headers: { 'x-user': 'alice', 'content-type': 'image/png', 'x-filename': 'bill.png' }, payload: Buffer.from('png') });
+    const id = res.json().file.id as string;
+    for (const folder of ['Finance', '']) {
+      expect((await call('alice', 'POST', '/api/library/move', { kind: 'file', id, folder, workspace: 'juniper' })).status).toBe(200);
+      expect((await call('alice', 'GET', `/api/library?workspace=juniper&folder=${folder}`)).body.files.map((f: { id: string }) => f.id)).toContain(id);
+    }
+  });
+
   it('moves a folder with its files between the roots', async () => {
     await call('alice', 'POST', '/api/folders', { name: 'Drafts', workspace: 'harbor' });
     const draft = (await call('alice', 'POST', '/api/markdown', { title: 'Draft', text: '# Draft', folder: 'Drafts', workspace: 'harbor' })).body.doc.id;

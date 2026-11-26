@@ -1,5 +1,5 @@
-// Docs' API: /api/*. A request names its organization (`?workspace=`, from the client's current organization, or a new
-// file's `workspace` in its JSON body) or a file the directory can place; one naming neither goes to the caller's first
+// Docs' API: /api/*. A request names its organization (`?workspace=`, from the client's current organization, or the
+// `workspace` in its JSON body) or a file the directory can place; one naming neither goes to the caller's first
 // organization. Docs' object checks membership itself.
 // The caller context carries the account and the channels the caller is in there, which grants name (docs/server/access.ts).
 import { Hono, type Context } from 'hono';
@@ -40,17 +40,23 @@ async function placeOfOpened(c: C): Promise<string | null> {
   return typeof id === 'string' ? directory(c, 'organizationOfId', id) : null;
 }
 
-/** The routes that make a file or folder, naming where in their JSON body (docs client api.ts placeFields). */
-export const MAKES = /^\/api\/(?:sheets|docs|decks|markdown|whiteboards|folders)$/;
-
 /**
- * A new file or folder's organization, named in the body (`{ workspace }`): without this one made in any organization
- * but the caller's first went to the first one's object, and was missing from the organization it was made in.
+ * The organization a JSON body names (`{ workspace }`, docs client api.ts placeFields), which the Docs server reads as
+ * it reads `?workspace=` (requireUser). Every route counts, not only those that make a file: a move into a folder
+ * (POST /api/library/move) names its root only there, and went to the caller's first organization, whose object did
+ * not have the file ("File not found"). A folder's change of root names its own in `from` (POST /api/folders/scope).
  */
+export function bodyPlace(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const { workspace, from } = body as { workspace?: unknown; from?: { workspace?: unknown } | null };
+  const named = (from && typeof from === 'object' ? from.workspace : undefined) ?? workspace;
+  return typeof named === 'string' && named ? named : null;
+}
+
+/** A JSON body's organization (`bodyPlace`). Only JSON is read: an upload's body is the file, and can be large. */
 async function placeOfBody(c: C): Promise<string | null> {
-  if (c.req.method !== 'POST' || !MAKES.test(new URL(c.req.url).pathname)) return null;
-  const workspace = ((await c.req.raw.clone().json().catch(() => null)) as { workspace?: unknown } | null)?.workspace;
-  return typeof workspace === 'string' && workspace ? workspace : null;
+  if (c.req.method === 'GET' || c.req.method === 'HEAD' || !c.req.header('content-type')?.includes('application/json')) return null;
+  return bodyPlace(await c.req.raw.clone().json().catch(() => null));
 }
 
 /** A public link's data (/api/public/<token>/...), asked for by anyone: the directory knows which organization's object made its token. */
