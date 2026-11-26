@@ -14,6 +14,7 @@ import { GuestsChatOnly, MailboxSettingUp, NoOrganization } from './components/N
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
+import { ComposeFab } from './components/ComposeFab';
 import type { PersonActions } from './components/PersonCard';
 import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { copyCode } from './components/AccessCodeCard';
@@ -959,6 +960,8 @@ export function App() {
       }
     />
   );
+  // No folder sidebar here (inside Home, or a phone-sized screen): Compose floats over the list instead.
+  const composeFab = tiny || inHome ? <ComposeFab onCompose={() => startCompose('new')} /> : null;
   const openRow = rowOf(openId);
   const listEl = (
     <MessageList
@@ -1135,7 +1138,10 @@ export function App() {
           {stacked ? (
             // The list stays mounted under the open thread, so going back finds it where it was.
             <div className="relative min-w-0 flex-1">
-              <div className={cn('h-full', openId !== null && 'invisible')}>{listEl}</div>
+              <div className={cn('relative h-full', openId !== null && 'invisible')}>
+                {listEl}
+                {composeFab}
+              </div>
               {openId !== null && (
                 <DocsDropZone className="absolute inset-0 z-10" label="Drop to reply with this file" onDrop={(f) => replyWithDocs([f])}>
                   {view}
@@ -1144,8 +1150,9 @@ export function App() {
             </div>
           ) : (
             <>
-              <div style={{ width: listPane.width }} className={cn('shrink-0 border-r border-hairline')}>
+              <div style={{ width: listPane.width }} className={cn('relative shrink-0 border-r border-hairline')}>
                 {listEl}
+                {composeFab}
               </div>
               <ResizeHandle label="Resize the message list" {...listPane.handleProps} />
               <DocsDropZone className="min-w-0 flex-1" label="Drop to reply with this file" onDrop={openId !== null ? (f) => replyWithDocs([f]) : null}>
