@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The FreeFlow Browser side panel is Chrome only (2026-11-26, Taskboard task 54).** It is a Chrome extension: the panel is the suite's `/home/browser` page framed by the extension, so the desktop shell, macOS and iOS have no way to show it (deliberate; the same chat is in every client's assistant).
 - **The off-today chip and arrowed Today button are web and desktop only (2026-11-25, Taskboard task 43).** macOS and iOS have no Calendar day or week views yet (gap to close with Calendar there).
 - **Send as email from Docs is on web and desktop only (2026-11-24, Taskboard task 37).** File › Send as email opens Mail's composer beside the file; Mail is web only, so macOS and iOS do not offer it (deliberate).
 - **The reconnect-calendar label is web and desktop only (2026-11-24, Taskboard task 38).** It is drawn by the suite bar, so macOS and iOS do not show it; their calendars sync through the same server, which stops at `auth_failed` (gap to close: a native banner).
