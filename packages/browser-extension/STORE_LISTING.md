@@ -23,6 +23,8 @@ Text to paste into the developer dashboard. Keep it true to `background.js`.
   > - When you ask it to, it can open pages in its own tabs, kept together in a collapsed "FreeFlow agent" tab group,
   >   and read, click, type and scroll there. It never types into password fields: for sign-ins and payments it hands
   >   the tab to you.
+  > - It asks you before it uses a site for the first time: always, for this session, or not at all. Settings in the
+  >   panel lists the sites you allowed, and lets you add or remove them.
   > - Stop it at any time from the panel, or from the icon's right-click menu, which closes all of its tabs.
   >
   > You need a FreeFlow account. Sign in once in the panel.
@@ -46,9 +48,12 @@ Give the reviewer a test account on app.freeflow.im (made for the review, not a 
   - `tabGroups`: keep the assistant's tabs in one collapsed "FreeFlow agent" group, apart from the user's tabs.
   - `scripting`: read the text of the page the user asks about, and of the assistant's own tabs; click, type and scroll
     in the assistant's own tabs when it asks.
-  - `storage`: remember which tabs belong to the assistant while the browser is open (session storage only).
+  - `storage`: remember which tabs belong to the assistant while the browser is open (session storage), and the sites
+    the user allowed it to use (local storage for "Always", session storage for "This session").
   - `sidePanel`: the panel where the user talks to their assistant.
   - `contextMenus`: Stop on the toolbar icon's right-click menu, to close the assistant's tabs when the panel is closed.
+  - `declarativeNetRequestWithHostAccess`: in the assistant's own tabs only, block pages of sites the user has not
+    allowed, so a link or redirect cannot take the assistant somewhere the user did not approve.
   - Host permission `<all_urls>`: the user may ask about any page they are viewing, and the assistant opens whatever
     site the user asks it to use, so the extension must be able to read any site. It acts (clicks, types) only in the
     assistant's own tabs, and reads the user's tab only when the user sends a message about it.

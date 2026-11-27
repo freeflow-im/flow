@@ -9,6 +9,10 @@ Two things (design: `docs/specs/browser-extension.md`):
   menu.
 - **Web tools.** The assistant opens and uses pages in its own tabs, in a "FreeFlow agent" tab group. The page's side is
   `packages/docs/client/src/agent/browserBridge.ts`.
+- **Sites the assistant may use** (`sites.js`). Before the assistant uses a site that is not on the list, the extension
+  asks (a card in the panel, else `ask.html` in a small window): Always, This session or Don't allow. A
+  `declarativeNetRequest` session rule blocks other sites' pages in the agent's tabs. The panel's **Settings** tab lists,
+  adds and removes sites. Tests: `pnpm --filter @flow/browser-extension test`.
 
 ## Two builds
 

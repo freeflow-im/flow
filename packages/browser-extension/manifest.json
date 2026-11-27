@@ -32,7 +32,8 @@
     "storage",
     "debugger",
     "sidePanel",
-    "contextMenus"
+    "contextMenus",
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "<all_urls>"

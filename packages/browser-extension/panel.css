@@ -55,3 +55,148 @@ body {
   flex: 1;
   font: inherit;
 }
+
+/* The tab bar: the assistant (the frame) and Settings. */
+#tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid #e3e6ea;
+  background: #f8f9fa;
+}
+#tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 6px 10px;
+  background: none;
+  font: inherit;
+  color: #5f6368;
+  cursor: pointer;
+}
+#tabs button[aria-selected='true'] {
+  border-bottom-color: #1a73e8;
+  color: #1a73e8;
+  font-weight: 600;
+}
+#suite[hidden] {
+  display: none;
+}
+
+/* Settings: the sites the assistant may use. */
+#settings {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}
+#settings[hidden] {
+  display: none;
+}
+#settings h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.note {
+  margin: 0 0 10px;
+  color: #5f6368;
+}
+.error {
+  margin: 0 0 8px;
+  color: #b3261e;
+}
+#add-site {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#add-site input {
+  flex: 1;
+  min-width: 0;
+}
+#add-site input,
+#add-site select,
+#add-site button,
+#site-list button {
+  font: inherit;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: #fff;
+}
+#add-site button {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+  cursor: pointer;
+}
+#site-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#site-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f1f3f4;
+}
+#site-list .site {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+#site-list .how {
+  font-size: 12px;
+  color: #5f6368;
+}
+#site-list .how.session {
+  color: #b06000;
+}
+#site-list button {
+  cursor: pointer;
+  color: #b3261e;
+}
+
+/* A question about a new site, over whatever tab is shown. */
+#asks:empty {
+  display: none;
+}
+#asks {
+  padding: 8px;
+  border-bottom: 1px solid #e3e6ea;
+  background: #fff8e1;
+}
+.ask-card + .ask-card {
+  margin-top: 8px;
+}
+.ask-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.ask-line {
+  margin-bottom: 8px;
+}
+.ask-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ask-buttons button {
+  font: inherit;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.ask-buttons .ask-always {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}
+.ask-buttons .ask-deny {
+  color: #b3261e;
+}

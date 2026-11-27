@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- FreeFlow Browser's side panel: the suite's /home/browser page in a frame (panel.js), and a footer for the agent's tabs. -->
+<!-- FreeFlow Browser's side panel: the suite's /home/browser page in a frame (panel.js), Settings (the sites the
+     assistant may use, sites.js), questions about new sites, and a footer for the agent's tabs. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -7,7 +8,30 @@
     <link rel="stylesheet" href="panel.css" />
   </head>
   <body>
+    <nav id="tabs" role="tablist">
+      <button type="button" role="tab" id="tab-chat" aria-selected="true">Assistant</button>
+      <button type="button" role="tab" id="tab-settings" aria-selected="false">Settings</button>
+    </nav>
+    <div id="asks" aria-live="polite"></div>
     <iframe id="suite" title="FreeFlow assistant" allow="clipboard-write"></iframe>
+    <section id="settings" hidden>
+      <h2>Sites your assistant may use</h2>
+      <p class="note">
+        Before the assistant opens or goes to a site that is not here, it asks you. Sites allowed for this session are
+        forgotten when you quit Chrome. A page you send from the panel yourself is not limited by this list.
+      </p>
+      <form id="add-site">
+        <input id="add-site-input" placeholder="example.com" spellcheck="false" autocomplete="off" aria-label="Site" />
+        <select id="add-site-how" aria-label="How long">
+          <option value="always">Always</option>
+          <option value="session">This session</option>
+        </select>
+        <button type="submit">Add</button>
+      </form>
+      <p id="add-site-error" class="error" hidden></p>
+      <ul id="site-list"></ul>
+      <p id="site-empty" class="note" hidden>No sites yet. The assistant will ask before it uses one.</p>
+    </section>
     <footer id="footer" hidden>
       <span id="agent-tabs"></span>
       <button type="button" id="stop" title="Close every tab the assistant opened">Stop</button>

@@ -109,8 +109,9 @@ export const isWebTool = (name: string): boolean => BROWSER_TOOLS.has(name);
  * `attach`, which answers false when this step already carries as many pictures as a request may.
  */
 export async function runWebTool(call: ClientToolCall, attach?: (image: AgentImage) => boolean): Promise<string> {
-  // A page load can take a while (the extension waits up to 20 s), and a click then reads the page.
-  const answer = await send({ type: 'call', name: call.name, input: call.input }, 60_000);
+  // A page load can take a while (the extension waits up to 20 s), a click then reads the page, and a new site may wait
+  // up to 2 minutes for the person to allow it (browser-extension.md §3.4).
+  const answer = await send({ type: 'call', name: call.name, input: call.input }, 200_000);
   if (!answer) {
     present = false;
     throw new WebToolError('The FreeFlow browser extension did not answer: it may have been removed or turned off. Tell the user.');

@@ -1,7 +1,10 @@
 // FreeFlow Browser's side panel (docs/specs/browser-extension.md). The chat is FreeFlow's own page (/home/browser) in a
 // frame, signed in with the person's FreeFlow session. This page tells the frame its key and window and the tab in
 // front (postMessage, to the suite's origin only), and shows the agent's tabs with Stop. The frame asks background.js for
-// the page's text itself, with the key, when a message is sent.
+// the page's text itself, with the key, when a message is sent. Settings lists the sites the assistant may use, and
+// questions about new sites show here as cards (sites.js): the extension's own page, so no web page can answer them.
+
+import { addSite, askCard, listSites, normalizeSite, pendingAsks, removeSite } from './sites.js';
 
 const PRODUCTION = 'https://app.freeflow.im';
 // The dev build may also use a local suite (its manifest lists localhost; the store build's does not).
@@ -71,3 +74,72 @@ if (LOCAL_ALLOWED) {
     location.reload();
   });
 }
+
+// --- Assistant | Settings ---
+const settings = document.getElementById('settings');
+function show(which) {
+  const chat = which === 'chat';
+  frame.hidden = !chat;
+  settings.hidden = chat;
+  document.getElementById('tab-chat').setAttribute('aria-selected', String(chat));
+  document.getElementById('tab-settings').setAttribute('aria-selected', String(!chat));
+  if (!chat) void showSites();
+}
+document.getElementById('tab-chat').addEventListener('click', () => show('chat'));
+document.getElementById('tab-settings').addEventListener('click', () => show('settings'));
+
+/** The sites list, with Remove on each. */
+async function showSites() {
+  const rows = await listSites();
+  const list = document.getElementById('site-list');
+  list.replaceChildren(
+    ...rows.map((r) => {
+      const li = document.createElement('li');
+      li.dataset.site = r.site;
+      const name = document.createElement('span');
+      name.className = 'site';
+      name.textContent = r.site;
+      name.title = `${r.site} and its subdomains`;
+      const how = document.createElement('span');
+      how.className = `how ${r.how}`;
+      how.textContent = r.how === 'always' ? 'Always' : 'This session';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove ${r.site}`);
+      remove.addEventListener('click', () => void removeSite(r.site));
+      li.append(name, how, remove);
+      return li;
+    }),
+  );
+  document.getElementById('site-empty').hidden = rows.length > 0;
+}
+
+document.getElementById('add-site').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('add-site-input');
+  const error = document.getElementById('add-site-error');
+  const site = normalizeSite(input.value);
+  error.hidden = !!site;
+  if (!site) {
+    error.textContent = 'Enter a site, such as example.com.';
+    return;
+  }
+  await addSite(site, document.getElementById('add-site-how').value);
+  input.value = '';
+});
+
+// --- Questions about new sites ---
+async function showAsks() {
+  const asks = await pendingAsks();
+  const box = document.getElementById('asks');
+  const shown = new Set([...box.children].map((c) => c.dataset.ask));
+  for (const c of [...box.children]) if (!asks.some((a) => a.id === c.dataset.ask)) c.remove();
+  for (const a of asks) if (!shown.has(a.id)) box.append(askCard(a));
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === 'local' && 'sites' in changes) || (area === 'session' && 'sessionSites' in changes)) void showSites();
+  if (area === 'session' && 'asks' in changes) void showAsks();
+});
+void showAsks();

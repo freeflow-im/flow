@@ -16,6 +16,8 @@
 // browser_screenshot attaches the debugger for the one capture, so a tab in the background can be drawn; the customer
 // build (package.mjs) has no debugger permission and shows the tab for a moment instead.
 
+import { isAllowed, listSites, siteOf } from './sites.js';
+
 const VERSION = chrome.runtime.getManifest().version;
 const GROUP_TITLE = 'FreeFlow agent';
 const LOAD_TIMEOUT_MS = 20_000;
@@ -25,6 +27,8 @@ const MAX_READ = 20_000;
 const TOOLS = ['browser_open', 'browser_tabs', 'browser_read', 'browser_click', 'browser_type', 'browser_scroll', 'browser_navigate', 'browser_close', 'browser_handoff', 'browser_screenshot'];
 const SHOT_MAX_WIDTH = 1280;
 const SHOT_TIMEOUT_MS = 8000;
+/** How long a question about a site waits for the person (browserBridge.ts waits longer for the call). */
+const ASK_TIMEOUT_MS = 120_000;
 
 /**
  * FreeFlow's own pages: production always, and a local dev server on any port only when the manifest lists it (the dev
@@ -45,6 +49,7 @@ async function agentTabs() {
 
 async function saveTabs(set) {
   await chrome.storage.session.set({ tabs: [...set] });
+  await updateBlockRule();
   await chrome.action.setBadgeText({ text: set.size ? String(set.size) : '' });
   await chrome.action.setBadgeBackgroundColor({ color: '#7c3aed' });
 }
@@ -409,6 +414,109 @@ async function screenshot(tab) {
 
 // --- The tools ---
 
+// --- Sites the assistant may use (sites.js; docs/specs/browser-extension.md §3.4) ---
+
+/**
+ * Asks the person whether the assistant may use a site, and waits for the answer: 'always', 'session', 'deny' or
+ * 'timeout'. The open side panel shows the question; with none open, ask.html does, in a small window. One question per
+ * site: a second call for the same site waits on the first.
+ */
+async function askPerson(site, action) {
+  const { asks = [] } = await chrome.storage.session.get('asks');
+  let ask = asks.find((a) => a.site === site);
+  if (!ask) {
+    ask = { id: crypto.randomUUID(), site, action, at: Date.now() };
+    await chrome.storage.session.set({ asks: [...asks, ask] });
+    const panels = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] }).catch(() => []);
+    const windows = await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [chrome.runtime.getURL('ask.html')] }).catch(() => []);
+    if (!panels.length && !windows.length) await chrome.windows.create({ url: chrome.runtime.getURL('ask.html'), type: 'popup', width: 460, height: 320, focused: true }).catch(() => {});
+  }
+  // Polled rather than awaited on an event: each storage call keeps this worker awake while it waits.
+  const end = Date.now() + ASK_TIMEOUT_MS;
+  for (;;) {
+    const { answers = {} } = await chrome.storage.session.get('answers');
+    if (answers[ask.id]) return answers[ask.id];
+    if (Date.now() > end) {
+      const { asks: left = [] } = await chrome.storage.session.get('asks');
+      await chrome.storage.session.set({ asks: left.filter((a) => a.id !== ask.id) });
+      return 'timeout';
+    }
+    await sleep(500);
+  }
+}
+
+/**
+ * Chrome itself refuses to load a page of a site not on the list in the agent's tabs (a session rule of
+ * declarativeNetRequest, for those tabs only), so a click or a redirect to another site loads nothing until the person
+ * allows it. Kept up to date with the agent's tabs and the list.
+ */
+const BLOCK_RULE = 1;
+async function updateBlockRule() {
+  const tabs = [...(await agentTabs())];
+  const sites = (await listSites()).map((r) => r.site);
+  const addRules = tabs.length
+    ? [{ id: BLOCK_RULE, priority: 1, action: { type: 'block' }, condition: { tabIds: tabs, resourceTypes: ['main_frame'], ...(sites.length ? { excludedRequestDomains: sites } : {}) } }]
+    : [];
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [BLOCK_RULE], addRules }).catch((e) => console.warn('FreeFlow: block rule', e));
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === 'local' && 'sites' in changes) || (area === 'session' && 'sessionSites' in changes)) void updateBlockRule();
+});
+void updateBlockRule();
+
+/** Passes when the assistant may use the address's site (asking the person if need be); else the error it is told. */
+async function requireSite(url, action) {
+  const site = siteOf(url);
+  if (!site || (await isAllowed(site))) return;
+  const answer = await askPerson(site, action);
+  if (answer === 'always' || answer === 'session') {
+    // Before the page is loaded (again): the block rule must already let it through.
+    await updateBlockRule();
+    return;
+  }
+  throw new ToolError(
+    answer === 'timeout'
+      ? `The user did not answer whether you may use ${site}. Tell them you asked, and try again only if they say so.`
+      : `The user did not allow you to use ${site}. Do not try it again unless they ask. They can allow it in Settings in the FreeFlow side panel.`,
+  );
+}
+
+/**
+ * The site one of the agent's tabs is on must be allowed: before an action on it (the list may have changed), and after
+ * a page loaded (a click, a redirect). After a load (`loaded`), Chrome has already refused a page of a site not on the
+ * list (the block rule), so: allowed now, the tab loads it again; refused, the tab goes back (to `before` if need be; a
+ * new tab closes) and the error is told.
+ */
+async function requireLanded(tabId, action, { isNew = false, loaded = false, before = null } = {}) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const url = tab?.url || tab?.pendingUrl || '';
+  const site = siteOf(url);
+  if (!site || (await isAllowed(site))) return;
+  try {
+    await requireSite(url, action);
+  } catch (e) {
+    if (isNew) await chrome.tabs.remove(tabId).catch(() => {});
+    else if (loaded) {
+      await chrome.tabs.goBack(tabId).catch(() => {});
+      await settled(tabId);
+      const now = await chrome.tabs.get(tabId).catch(() => null);
+      const there = siteOf(now?.url);
+      if (before && there && !(await isAllowed(there))) {
+        await chrome.tabs.update(tabId, { url: before }).catch(() => {});
+        await settled(tabId);
+      }
+    }
+    throw e;
+  }
+  if (loaded) {
+    await chrome.tabs.update(tabId, { url });
+    await settled(tabId);
+  }
+}
+
+/** Whether the tab is one the agent opened (not the person's, which a side-panel message shared for reading). */
+const isAgentTab = async (tabId) => (await agentTabs()).has(tabId);
+
 async function readTab(tabId, offset = 0) {
   const page = await inPage(tabId, readPage, [Math.max(0, Number(offset) || 0), MAX_READ]);
   return `Tab ${tabId}: ${page.title}\nURL: ${page.url}\n\n${page.text || '(the page shows no text)'}`;
@@ -418,12 +526,16 @@ async function run(name, input, sender) {
   switch (name) {
     case 'browser_open': {
       const url = webUrl(input.url);
-      const tab = await chrome.tabs.create({ url, active: false, ...(sender.tab ? { windowId: sender.tab.windowId } : {}) });
+      await requireSite(url, name);
+      // Blank first, so the block rule covers the tab before it loads anything (a redirect to another site included).
+      const tab = await chrome.tabs.create({ url: 'about:blank', active: false, ...(sender.tab ? { windowId: sender.tab.windowId } : {}) });
       const set = await agentTabs();
       set.add(tab.id);
       await saveTabs(set);
       await addToGroup(tab.id, tab.windowId);
+      await chrome.tabs.update(tab.id, { url });
       await settled(tab.id);
+      await requireLanded(tab.id, name, { isNew: true, loaded: true });
       return `Opened tab ${tab.id}.\n${await readTab(tab.id)}`;
     }
     case 'browser_tabs': {
@@ -433,31 +545,43 @@ async function run(name, input, sender) {
     }
     case 'browser_read': {
       const tab = await agentTab(input.tab, { reading: true, sender });
+      if (await isAgentTab(tab.id)) await requireLanded(tab.id, name);
       return readTab(tab.id, input.offset);
     }
     case 'browser_click': {
       const tab = await agentTab(input.tab);
+      await requireLanded(tab.id, name);
       await inPage(tab.id, findAndClick, [String(input.ref)]);
       await settled(tab.id);
+      await requireLanded(tab.id, name, { loaded: true, before: tab.url });
       return `Clicked [${input.ref}].\n${await readTab(tab.id)}`;
     }
     case 'browser_type': {
       const tab = await agentTab(input.tab);
+      await requireLanded(tab.id, name);
       await inPage(tab.id, findAndType, [String(input.ref), String(input.text ?? ''), !!input.submit]);
       if (input.submit) await settled(tab.id);
+      await requireLanded(tab.id, name, { loaded: true, before: tab.url });
       return `Typed into [${input.ref}]${input.submit ? ' and submitted' : ''}.\n${await readTab(tab.id)}`;
     }
     case 'browser_scroll': {
       const tab = await agentTab(input.tab);
+      await requireLanded(tab.id, name);
       const at = await inPage(tab.id, scrollPage, [input.direction ?? 'down']);
       await sleep(SETTLE_MS);
       return `Scrolled ${input.direction ?? 'down'}: now at ${at.y} of ${at.height} (a screen is ${at.viewport}). browser_read shows what loaded.`;
     }
     case 'browser_navigate': {
       const tab = await agentTab(input.tab);
+      const before = tab.url;
       if (input.back) await chrome.tabs.goBack(tab.id);
-      else await chrome.tabs.update(tab.id, { url: webUrl(input.url) });
+      else {
+        const url = webUrl(input.url);
+        await requireSite(url, name);
+        await chrome.tabs.update(tab.id, { url });
+      }
       await settled(tab.id);
+      await requireLanded(tab.id, name, { loaded: true, before });
       return readTab(tab.id);
     }
     case 'browser_close': {
@@ -474,6 +598,7 @@ async function run(name, input, sender) {
     }
     case 'browser_screenshot': {
       const tab = await agentTab(input.tab, { reading: true, sender });
+      if (await isAgentTab(tab.id)) await requireLanded(tab.id, name);
       return screenshot(tab);
     }
     default:

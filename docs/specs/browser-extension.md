@@ -176,6 +176,25 @@ the user's own tab", and so does a read from a FreeFlow page in a normal tab (te
 The server offers the `browser_*` tools only to the person's own assistant (`edge/src/assistant/browserTools.ts`). So a
 shared agent picked in the panel gets the page's text, but cannot read further or take screenshots.
 
+### 3.4 Sites the assistant may use
+
+(Operator request, 2026-11-26.) The extension keeps a list of sites the assistant may use. Before the assistant opens
+or goes to a site that is not on it, the extension asks the person: **Always**, **This session** or **Don't allow**.
+
+- **A site** is a host name without `www.`; a rule covers its subdomains (`linkedin.com` covers `uk.linkedin.com`).
+  "Always" rules are in the extension's local storage; "This session" rules in session storage, which Chrome clears when
+  it quits. A refusal is not remembered: the next try asks again. The model is told not to retry unless asked.
+- **Where it asks:** a card at the top of the side panel when one is open, else a small window (`ask.html`). Both are
+  the extension's own pages: no web page or FreeFlow page can answer. With no answer in 2 minutes, the call fails and
+  the model is told so.
+- **Settings** (a tab in the panel) lists the rules, each with Remove, and adds one (Always or This session).
+- **Enforced by Chrome, not only by checks.** A `declarativeNetRequest` session rule blocks page loads (main frame
+  only) in the agent's own tabs for every site not on the list. So a click or a redirect to another site loads nothing:
+  the tab shows Chrome's "blocked" page while the extension asks. Allowed, the page loads again; refused, the tab goes
+  back. Before `browser_open` and `browser_navigate` the extension asks first, so nothing is blocked there.
+- **Not covered:** the person's own tab sent from the panel (they chose it), and frames inside a page (embeds, ads).
+  A link that opens a new tab (`target=_blank`) opens it outside the agent's tabs, as before.
+
 ## 4. Which agent, which organization
 
 - The panel opens the person's **default** agent in the organization they last chose in the suite bar.
