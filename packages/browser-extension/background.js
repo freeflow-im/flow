@@ -54,7 +54,8 @@ async function saveTabs(set) {
   await chrome.action.setBadgeBackgroundColor({ color: '#7c3aed' });
 }
 
-// The person's tabs a side-panel message was about (`page`): the agent may read and screenshot them, from the panel only.
+// The person's tabs a side-panel message was about (`page`): the agent may read and screenshot them from the panel, even
+// after the panel there closed (acting needs the panel open: panelTabs).
 async function sharedTabs() {
   const { shared = [] } = await chrome.storage.session.get('shared');
   return new Set(shared);
@@ -67,21 +68,39 @@ async function shareTab(id) {
 }
 
 /**
- * One of the agent's tabs, else an error the agent is told. `reading` (browser_read, browser_screenshot) from the side
- * panel's frame also allows a tab of the person's that a panel message was about.
+ * The person's tabs with a side panel open on them (panel.js keeps key → tab). Opening the panel on a tab lets the agent
+ * use it from that panel: read, click, type, scroll, navigate and screenshot, never close it (docs/specs/browser-extension.md §3.3).
  */
-async function agentTab(tab, { reading = false, sender } = {}) {
+async function panelTabs() {
+  const { panelKeys = {} } = await chrome.storage.session.get('panelKeys');
+  return new Set(Object.values(panelKeys));
+}
+
+/**
+ * A tab the agent may use for this call, else an error it is told: one of its own tabs; from the side panel's frame, a
+ * tab of the person's with a panel open on it (`reading` or `acting`); or, from the panel, a tab a panel message was
+ * about whose panel is gone (`reading` only).
+ */
+async function agentTab(tab, { reading = false, acting = false, sender } = {}) {
   const id = Number(tab);
-  const mine = Number.isInteger(id) && (await agentTabs()).has(id);
-  const shared = !mine && reading && sender && fromPanel(sender) && Number.isInteger(id) && (await sharedTabs()).has(id);
-  if (!mine && !shared) {
+  const valid = Number.isInteger(id);
+  const mine = valid && (await agentTabs()).has(id);
+  const viaPanel = !mine && valid && !!sender && fromPanel(sender);
+  const panel = viaPanel && (reading || acting) && (await panelTabs()).has(id);
+  const shared = viaPanel && !panel && reading && (await sharedTabs()).has(id);
+  if (!mine && !panel && !shared) {
+    const known = valid && ((await sharedTabs()).has(id) || (await panelTabs()).has(id));
     throw new ToolError(
-      Number.isInteger(id) && (await sharedTabs()).has(id)
-        ? `Tab ${tab} is the user's own tab: you may only read it (browser_read) and look at it (browser_screenshot). To act on that page, open it in a tab of your own with browser_open.`
-        : `Tab ${tab} is not one of your tabs. browser_tabs lists them; browser_open opens one.`,
+      !known
+        ? `Tab ${tab} is not one of your tabs. browser_tabs lists them; browser_open opens one.`
+        : viaPanel && (await panelTabs()).has(id)
+          ? `Tab ${tab} is the user's own tab: you may use it, but not close it.`
+          : !viaPanel
+            ? `Tab ${tab} is the user's own tab: only the FreeFlow side panel open on it may use it, not this page. Use a tab of your own (browser_open).`
+            : `Tab ${tab} is the user's own tab, and the side panel is not open on it now: you may only read it (browser_read) and look at it (browser_screenshot). To act on that page, open it in a tab of your own with browser_open.`,
     );
   }
-  if (shared) return chrome.tabs.get(id).catch(() => { throw new ToolError(`Tab ${tab} was closed.`); });
+  if (panel || shared) return chrome.tabs.get(id).catch(() => { throw new ToolError(`Tab ${tab} was closed.`); });
   try {
     return await chrome.tabs.get(id);
   } catch {
@@ -466,14 +485,39 @@ async function askPerson(site, action) {
  * allows it. Kept up to date with the agent's tabs and the list.
  */
 const BLOCK_RULE = 1;
+/** Rules 2 to 2 + MAX_GUARDED: one per tab of the person's the agent is acting in right now (`guarded`). */
+const MAX_GUARDED = 20;
 async function updateBlockRule() {
   const tabs = [...(await agentTabs())];
   const sites = (await listSites()).map((r) => r.site);
-  const addRules = tabs.length
-    ? [{ id: BLOCK_RULE, priority: 1, action: { type: 'block' }, condition: { tabIds: tabs, resourceTypes: ['main_frame'], ...(sites.length ? { excludedRequestDomains: sites } : {}) } }]
-    : [];
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [BLOCK_RULE], addRules }).catch((e) => console.warn('FreeFlow: block rule', e));
+  const { guarded = [] } = await chrome.storage.session.get('guarded');
+  const rule = (id, tabIds, allowed) => ({ id, priority: 1, action: { type: 'block' }, condition: { tabIds, resourceTypes: ['main_frame'], ...(allowed.length ? { excludedRequestDomains: allowed } : {}) } });
+  const addRules = [
+    ...(tabs.length ? [rule(BLOCK_RULE, tabs, sites)] : []),
+    // The person's own tab blocks other sites only while the agent acts in it, so the person's own clicks never are.
+    ...guarded.slice(0, MAX_GUARDED).map((tabId, i) => rule(2 + i, [tabId], sites)),
+  ];
+  const removeRuleIds = Array.from({ length: MAX_GUARDED + 1 }, (_, i) => BLOCK_RULE + i);
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds, addRules }).catch((e) => console.warn('FreeFlow: block rule', e));
 }
+
+
+/** Runs an action of the agent's in a tab of the person's with other sites blocked for that tab while it runs. */
+async function guarded(tabId, fn) {
+  const { guarded: list = [] } = await chrome.storage.session.get('guarded');
+  await chrome.storage.session.set({ guarded: [...new Set([...list, tabId])] });
+  await updateBlockRule();
+  try {
+    return await fn();
+  } finally {
+    const { guarded: now = [] } = await chrome.storage.session.get('guarded');
+    await chrome.storage.session.set({ guarded: now.filter((t) => t !== tabId) });
+    await updateBlockRule();
+  }
+}
+
+/** Runs an action in a tab: the agent's own as it is, the person's (a panel tab) guarded. */
+const actIn = async (tabId, fn) => ((await isAgentTab(tabId)) ? fn() : guarded(tabId, fn));
 chrome.storage.onChanged.addListener((changes, area) => {
   if ((area === 'local' && 'sites' in changes) || (area === 'session' && 'sessionSites' in changes)) void updateBlockRule();
 });
@@ -512,14 +556,10 @@ async function requireLanded(tabId, action, { isNew = false, loaded = false, bef
   } catch (e) {
     if (isNew) await chrome.tabs.remove(tabId).catch(() => {});
     else if (loaded) {
-      await chrome.tabs.goBack(tabId).catch(() => {});
+      // Straight to the page it was on: Chrome's back skips pages left by a script's click (its history intervention).
+      if (before) await chrome.tabs.update(tabId, { url: before }).catch(() => {});
+      else await goBack(tabId);
       await settled(tabId);
-      const now = await chrome.tabs.get(tabId).catch(() => null);
-      const there = siteOf(now?.url);
-      if (before && there && !(await isAllowed(there))) {
-        await chrome.tabs.update(tabId, { url: before }).catch(() => {});
-        await settled(tabId);
-      }
     }
     throw e;
   }
@@ -527,6 +567,15 @@ async function requireLanded(tabId, action, { isNew = false, loaded = false, bef
     await chrome.tabs.update(tabId, { url });
     await settled(tabId);
   }
+}
+
+/**
+ * Back one page, as the page's own history.back(): Chrome's chrome.tabs.goBack skips entries of pages left without a
+ * user gesture, which every click of the agent's is, so it would jump past the page the agent came from.
+ */
+async function goBack(tabId) {
+  const done = await chrome.scripting.executeScript({ target: { tabId }, func: () => history.back() }).then(() => true, () => false);
+  if (!done) await chrome.tabs.goBack(tabId).catch(() => {});
 }
 
 /** Whether the tab is one the agent opened (not the person's, which a side-panel message shared for reading). */
@@ -560,52 +609,60 @@ async function run(name, input, sender) {
     }
     case 'browser_read': {
       const tab = await agentTab(input.tab, { reading: true, sender });
-      if (await isAgentTab(tab.id)) await requireLanded(tab.id, name);
+      await requireLanded(tab.id, name);
       return readTab(tab.id, input.offset);
     }
     case 'browser_click': {
-      const tab = await agentTab(input.tab);
-      await requireLanded(tab.id, name);
-      await inPage(tab.id, findAndClick, [String(input.ref)]);
-      await settled(tab.id);
-      await requireLanded(tab.id, name, { loaded: true, before: tab.url });
-      return `Clicked [${input.ref}].\n${await readTab(tab.id)}`;
+      const tab = await agentTab(input.tab, { acting: true, sender });
+      return actIn(tab.id, async () => {
+        await requireLanded(tab.id, name);
+        await inPage(tab.id, findAndClick, [String(input.ref)]);
+        await settled(tab.id);
+        await requireLanded(tab.id, name, { loaded: true, before: tab.url });
+        return `Clicked [${input.ref}].\n${await readTab(tab.id)}`;
+      });
     }
     case 'browser_type': {
-      const tab = await agentTab(input.tab);
-      await requireLanded(tab.id, name);
-      await inPage(tab.id, findAndType, [String(input.ref), String(input.text ?? ''), !!input.submit]);
-      if (input.submit) await settled(tab.id);
-      await requireLanded(tab.id, name, { loaded: true, before: tab.url });
-      return `Typed into [${input.ref}]${input.submit ? ' and submitted' : ''}.\n${await readTab(tab.id)}`;
+      const tab = await agentTab(input.tab, { acting: true, sender });
+      return actIn(tab.id, async () => {
+        await requireLanded(tab.id, name);
+        await inPage(tab.id, findAndType, [String(input.ref), String(input.text ?? ''), !!input.submit]);
+        if (input.submit) await settled(tab.id);
+        await requireLanded(tab.id, name, { loaded: true, before: tab.url });
+        return `Typed into [${input.ref}]${input.submit ? ' and submitted' : ''}.\n${await readTab(tab.id)}`;
+      });
     }
     case 'browser_scroll': {
-      const tab = await agentTab(input.tab);
+      const tab = await agentTab(input.tab, { acting: true, sender });
       await requireLanded(tab.id, name);
       const at = await inPage(tab.id, scrollPage, [input.direction ?? 'down']);
       await sleep(SETTLE_MS);
       return `Scrolled ${input.direction ?? 'down'}: now at ${at.y} of ${at.height} (a screen is ${at.viewport}). browser_read shows what loaded.`;
     }
     case 'browser_navigate': {
-      const tab = await agentTab(input.tab);
+      const tab = await agentTab(input.tab, { acting: true, sender });
       const before = tab.url;
-      if (input.back) await chrome.tabs.goBack(tab.id);
-      else {
-        const url = webUrl(input.url);
-        await requireSite(url, name);
-        await chrome.tabs.update(tab.id, { url });
-      }
-      await settled(tab.id);
-      await requireLanded(tab.id, name, { loaded: true, before });
-      return readTab(tab.id);
+      return actIn(tab.id, async () => {
+        if (input.back) await goBack(tab.id);
+        else {
+          const url = webUrl(input.url);
+          await requireSite(url, name);
+          await chrome.tabs.update(tab.id, { url });
+        }
+        await settled(tab.id);
+        await requireLanded(tab.id, name, { loaded: true, before });
+        return readTab(tab.id);
+      });
     }
     case 'browser_close': {
-      const tab = await agentTab(input.tab);
+      // Never the person's own tab, even with the panel open on it.
+      const tab = await agentTab(input.tab, { sender });
       await chrome.tabs.remove(tab.id);
       return `Closed tab ${tab.id}.`;
     }
     case 'browser_handoff': {
-      const tab = await agentTab(input.tab);
+      const tab = await agentTab(input.tab, { acting: true, sender });
+      await requireLanded(tab.id, name);
       await inPage(tab.id, showHandoffCard, [String(input.reason ?? 'Please finish this step.')]);
       await chrome.tabs.update(tab.id, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
@@ -613,7 +670,7 @@ async function run(name, input, sender) {
     }
     case 'browser_screenshot': {
       const tab = await agentTab(input.tab, { reading: true, sender });
-      if (await isAgentTab(tab.id)) await requireLanded(tab.id, name);
+      await requireLanded(tab.id, name);
       return screenshot(tab);
     }
     default:
@@ -646,8 +703,12 @@ async function panelPage(msg, sender) {
   const [sel] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selectedText }).catch(() => [null]);
   // The agent's own tab (the person is looking at one it opened): it may use every tool there, so it is not shared.
   const mine = (await agentTabs()).has(tab.id);
-  if (!mine) await shareTab(tab.id);
-  return { tab: tab.id, agentTab: mine, url: page.url, title: page.title, text: page.text, truncated: /\n\n\[\d+ more characters: browser_read with offset \d+\]$/.test(page.text), selection: sel?.result || undefined };
+  if (!mine) {
+    // Only the person's own message reads it here; any tool the agent calls on it asks for its site first (the list is
+    // the record of every site the agent used: operator ruling 2026-11-27).
+    await shareTab(tab.id);
+  }
+  return { tab: tab.id, agentTab: mine, canAct: !mine, url: page.url, title: page.title, text: page.text, truncated: /\n\n\[\d+ more characters: browser_read with offset \d+\]$/.test(page.text), selection: sel?.result || undefined };
 }
 
 chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {

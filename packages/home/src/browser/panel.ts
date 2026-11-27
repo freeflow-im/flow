@@ -55,6 +55,7 @@ export async function readPanelPage(key: string, windowId: number): Promise<{ pa
   const page: WebPageContext = {
     tab: Number(a.tab),
     ...(a.agentTab === true ? { agentTab: true } : {}),
+    ...(a.canAct === true ? { canAct: true } : {}),
     url: String(a.url ?? ''),
     title: String(a.title ?? ''),
     text: String(a.text ?? '').slice(0, MAX_WEB_PAGE_TEXT),

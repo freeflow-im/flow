@@ -19,7 +19,8 @@ Text to paste into the developer dashboard. Keep it true to `background.js`.
   > - Click the FreeFlow icon to open the panel. Ask "Summarize this page", "What are the key points?" or "Draft a
   >   reply to this", and the assistant answers from the page in front of you.
   > - The page is sent only when you send a message, and only that page. Take it off a message with ✕.
-  > - The assistant can read and look at that page, but never clicks or types in your own tabs.
+  > - The panel belongs to the tab you open it on, and lets the assistant use that page: read it, click, type and
+  >   scroll there when you ask. It never closes your tab. On tabs where the panel is not open, it does nothing.
   > - When you ask it to, it can open pages in its own tabs, kept together in a collapsed "FreeFlow agent" tab group,
   >   and read, click, type and scroll there. It never types into password fields: for sign-ins and payments it hands
   >   the tab to you.
@@ -47,16 +48,18 @@ Give the reviewer a test account on app.freeflow.im (made for the review, not a 
   - `tabs`: open, find, switch and close the assistant's own tabs.
   - `tabGroups`: keep the assistant's tabs in one collapsed "FreeFlow agent" group, apart from the user's tabs.
   - `scripting`: read the text of the page the user asks about, and of the assistant's own tabs; click, type and scroll
-    in the assistant's own tabs when it asks.
+    in the assistant's own tabs, and in the user's tab where the user opened the side panel, when the user asks.
   - `storage`: remember which tabs belong to the assistant while the browser is open (session storage), and the sites
     the user allowed it to use (local storage for "Always", session storage for "This session").
   - `sidePanel`: the panel where the user talks to their assistant.
   - `contextMenus`: Stop on the toolbar icon's right-click menu, to close the assistant's tabs when the panel is closed.
-  - `declarativeNetRequestWithHostAccess`: in the assistant's own tabs only, block pages of sites the user has not
-    allowed, so a link or redirect cannot take the assistant somewhere the user did not approve.
+  - `declarativeNetRequestWithHostAccess`: block pages of sites the user has not allowed in the assistant's own tabs,
+    and in the user's tab only while the assistant acts there, so a link or redirect cannot take the assistant somewhere
+    the user did not approve.
   - Host permission `<all_urls>`: the user may ask about any page they are viewing, and the assistant opens whatever
     site the user asks it to use, so the extension must be able to read any site. It acts (clicks, types) only in the
-    assistant's own tabs, and reads the user's tab only when the user sends a message about it.
+    assistant's own tabs and in a tab where the user opened the side panel, and reads the user's tab only when the user
+    sends a message about it.
 - **Remote code:** No. All code is in the package; commands from FreeFlow are data (a tool name and its input).
 - **Data usage:** collects **Website content**: the text of the page in front of the user, only when they send a
   message in the side panel (they can leave it off), and page text and screenshots of the assistant's own tabs, sent to

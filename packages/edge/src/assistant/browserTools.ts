@@ -10,7 +10,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { BROWSER_TOOLS, type AgentContext } from '@flow/docs/shared/agent/protocol.ts';
 
-const tab = z.number().int().positive().describe('The tab, by the number browser_open or browser_tabs gave.');
+const tab = z.number().int().positive().describe("The tab, by the number browser_open or browser_tabs gave, or the user's own tab when the context says you may use it (FreeFlow Browser's side panel is open on it).");
 /** browser_read and browser_screenshot also take the tab of the user's page a side-panel message is about (its context names it). */
 const readTab = z.number().int().positive().describe("The tab, by the number browser_open or browser_tabs gave, or the user's own tab that the context names (FreeFlow Browser's side panel).");
 const ref = z.string().min(1).max(12).describe('The element, by its number in [brackets] from the last read of the page.');

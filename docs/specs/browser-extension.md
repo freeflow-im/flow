@@ -159,22 +159,32 @@ The store listing and privacy answers change to say this (§6).
 
 ### 3.3 Acting on the page
 
-**Phase 1 (this design): read only.** For the person's own tab the agent gets `browser_read` (to page through a long
-page) and `browser_screenshot`. Clicks, typing and navigation stay in the agent's own tabs, as today. If the agent
-needs to act, it opens the same address in its own tab with `browser_open`, which keeps the person's tab safe.
+**Opening the panel on a tab lets the agent use it** (operator request 2026-11-27, once panels became per tab). The
+panel belongs to its tab, so opening it there is a clear act by the person. From that panel, the agent may use every
+browser tool on the tab (read, click, type, scroll, navigate, screenshot, hand off) except `browser_close`: it never
+closes the person's tab. Closing the panel takes the permission away. Until 2026-11-27 the person's tab was read only.
 
-**Phase 2 (later, needs a ruling): act on the person's tab.** A switch on the page chip, "Let Sam use this tab". While
-it is on, `browser_click`, `browser_type`, `browser_scroll` and `browser_navigate` work on that tab too, and the chip
-shows that the agent is using it. It turns off when the turn ends.
+- **Sites.** Opening the panel does not allow the tab's site. The first time the agent uses the tab (any tool, a read
+  included), the extension asks for its site unless it is on the list, as in the agent's own tabs (§3.4). The list is the
+  record of every site the agent used (operator ruling 2026-11-27). Only the page text the person's own message carries
+  is exempt: that is the person's act, not the agent's.
+- **Blocking only while the agent acts.** The agent's tabs block other sites all the time. The person's tab blocks them
+  only while one of the agent's actions runs in it (`guarded`: a `declarativeNetRequest` rule for that tab, added before
+  the action and removed after), so the person's own clicks are never blocked.
+- **Going back.** Chrome's `tabs.goBack` skips pages left by a script's click (its history intervention), which every
+  click of the agent's is. So "back" runs `history.back()` in the page, and after a refused site the tab goes straight to
+  the page it was on.
+- **Only the panel.** The assistant in Mail, Docs or Calendar (a FreeFlow page in a normal tab) still works only in its
+  own tabs: a call naming the person's tab from there fails.
 
 When the tab in front is one the agent opened itself (the person switched to it), it is not the person's tab: the
 `page` answer says `agentTab`, the chip says "Assistant's tab", and the agent may use every tool there. Asked to go
 somewhere else, it goes there in that tab with `browser_navigate` instead of opening another (found in testing,
 2026-11-26).
 
-The extension enforces this, not the model: a tab of the person's that the panel read (`page`) is remembered as shared, and only
-`browser_read` and `browser_screenshot` from the panel's frame may name it. A click or typing there fails with "Tab N is
-the user's own tab", and so does a read from a FreeFlow page in a normal tab (tested end to end, §7).
+The extension enforces this, not the model. A tab of the person's that a panel message read (`page`) is remembered as
+shared: after its panel closes, the panel may still read and screenshot it, nothing more. Any call naming the person's
+tab from a FreeFlow page in a normal tab fails, and so does `browser_close` on it (tested end to end, §7).
 
 The server offers the `browser_*` tools only to the person's own assistant (`edge/src/assistant/browserTools.ts`). So a
 shared agent picked in the panel gets the page's text, but cannot read further or take screenshots.
@@ -195,7 +205,8 @@ or goes to a site that is not on it, the extension asks the person: **Always**, 
   only) in the agent's own tabs for every site not on the list. So a click or a redirect to another site loads nothing:
   the tab shows Chrome's "blocked" page while the extension asks. Allowed, the page loads again; refused, the tab goes
   back. Before `browser_open` and `browser_navigate` the extension asks first, so nothing is blocked there.
-- **Not covered:** the person's own tab sent from the panel (they chose it), and frames inside a page (embeds, ads).
+- **Not covered:** the page text the person's own message carries (their act), and frames inside a page (embeds, ads).
+  Every tool the agent calls asks, on any tab: its own, the person's tab with the panel open, or one shared earlier.
   A link that opens a new tab (`target=_blank`) opens it outside the agent's tabs, as before.
 
 ## 4. Which agent, which organization

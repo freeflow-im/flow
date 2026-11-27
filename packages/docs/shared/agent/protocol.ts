@@ -122,6 +122,11 @@ export interface WebPageContext {
   tab: number;
   /** The tab is one the agent opened (in its tab group), not the person's own: every browser tool may use it. */
   agentTab?: boolean;
+  /**
+   * The person's own tab, with the side panel open on it: the agent may use every browser tool on it but browser_close
+   * (opening the panel there is the permission; browser-extension.md §3.3). Absent: read and screenshot only.
+   */
+  canAct?: boolean;
   url: string;
   title: string;
   /** The page's text as the extension read it, at most MAX_WEB_PAGE_TEXT characters. */

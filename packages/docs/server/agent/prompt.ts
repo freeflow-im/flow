@@ -191,6 +191,8 @@ export function renderWebPage(w: WebPageContext): string {
     ...(w.truncated && tab ? [`The page is longer than this. browser_read with tab ${tab} and offset ${MAX_WEB_PAGE_TEXT} reads on.`] : []),
     tab && w.agentTab === true
       ? `This is one of your own tabs (tab ${tab}), which the user is looking at: use every browser tool on it. To go to another page here, use browser_navigate with tab ${tab} rather than opening a new tab, unless the user asks for one.`
+      : tab && w.canAct === true
+      ? `This is the user's own tab (tab ${tab}), and they opened the FreeFlow side panel on it, which lets you use it: when the browser_* tools are there, read, click, type, scroll, navigate and screenshot it with tab ${tab}, but never close it. Work in this tab rather than opening a new one, unless the user asks for one. The first time you use a site (this one included), the browser asks the user to allow it. Act only as the user asked: this is their own page, signed in as them.`
       : tab
       ? `This is the user's own tab, not one of yours: when the browser_* tools are there, you may read it (browser_read) and look at it (browser_screenshot) with tab ${tab}, but not click, type or navigate in it. To act on the page, open its address in a tab of your own with browser_open.`
       : 'The user\'s tab cannot be read again from here.',
