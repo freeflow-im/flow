@@ -10,13 +10,13 @@ export const HOME_CHAT = 'home';
 export type ChatItem =
   | { kind: 'user'; text: string; /** data: URLs of the images sent with it */ images?: string[] }
   | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; id: string; name: string; status: 'running' | 'ok' | 'error'; error?: string; result?: string };
+  | { kind: 'tool'; id: string; name: string; status: 'running' | 'ok' | 'error'; error?: string; result?: string; /** data: URLs of pictures the tool took */ images?: string[] };
 
 type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_start'; id: string; name: string }
   | { type: 'tool_end'; id: string; ok: boolean; result?: string }
-  | { type: 'client_tools'; calls: { id: string; name: string }[] }
+  | { type: 'client_tools'; calls: SuiteToolCall[] }
   | { type: 'permission'; id: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
@@ -43,14 +43,37 @@ const zone = () => {
 const withOrg = (path: string, org: string | null) => (org ? `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(org)}` : path);
 const errorOf = async (res: Response) => ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Request failed (${res.status})`;
 
+/** A browser tool call the turn paused on (protocol.ts ClientToolCall). */
+export interface SuiteToolCall { id: string; name: string; input?: Record<string, unknown> }
+
+/** What a page that can run browser tools answers (FreeFlow Browser's side panel, docs/specs/browser-extension.md). */
+export interface SuiteToolAnswer {
+  toolResults: { id: string; content: string; isError?: boolean }[];
+  /** Pictures the tools took, sent after the results with `message` (the API takes only text in tool results). */
+  images?: { mediaType: string; data: string }[];
+  message?: string;
+  /** Each call's picture, shown under its line. */
+  pictures?: Record<string, string>;
+}
+
+/** What a page adds to the suite's chat. Without these, browser tools are answered "open that app". */
+export interface SuiteChatOptions {
+  /** Context read once when a message is sent, for every request of its turn (the side panel's web page). */
+  prepare?: () => Promise<Record<string, unknown>>;
+  /** Runs the browser tools a turn paused on. */
+  runClientCalls?: (calls: SuiteToolCall[]) => Promise<SuiteToolAnswer>;
+}
+
 /**
  * The chat: its transcript, a turn running, and send, stop and new chat. `org` is the organization the bar selected;
  * `agent` the agent talked to (an id from GET /api/agent/agents), or null for the person's own assistant.
  */
-export function useSuiteAssistant(org: string | null, agent: string | null = null, context: Record<string, unknown> = {}) {
+export function useSuiteAssistant(org: string | null, agent: string | null = null, context: Record<string, unknown> = {}, options: SuiteChatOptions = {}) {
   // What the page says it shows (the Build app page's draft and file): read at send time, so it is always the current one.
   const contextRef = useRef(context);
   contextRef.current = context;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,12 +112,15 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
     const setTool = (id: string, status: 'ok' | 'error', err?: string, result?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}), ...(result !== undefined ? { result } : {}) } : i)));
     void (async () => {
       const whose = { ...(org ? { workspace: org } : {}), ...(agent ? { agent } : {}) };
-      let body: Record<string, unknown> = { message, context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose, ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}) };
+      // The page's context for this message (the side panel's web page), the same for every request of the turn.
+      const prepared = await (optionsRef.current.prepare?.() ?? Promise.resolve({})).catch((): Record<string, unknown> => ({}));
+      const turnContext = () => ({ page: 'home', ...contextRef.current, ...prepared });
+      let body: Record<string, unknown> = { message, context: turnContext(), scope: HOME_CHAT, ...whose, ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}) };
       try {
         for (;;) {
           const res = await fetch(withOrg('/api/agent/turn', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Timezone': zone() }, body: JSON.stringify(body), signal: abort.signal });
           if (!res.ok || !res.body) throw new Error(res.status === 401 ? 'You are signed out. Reload the page to sign in again.' : await errorOf(res));
-          let calls: { id: string; name: string }[] | null = null;
+          let calls: SuiteToolCall[] | null = null;
           const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
           let buf = '';
           for (;;) {
@@ -111,10 +137,26 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
             }
           }
           if (!calls || abort.signal.aborted) break;
+          const pending: SuiteToolCall[] = calls;
+          const run = optionsRef.current.runClientCalls;
+          if (run) {
+            // The page runs them (the side panel: the browser extension), and the turn goes on with what they answered.
+            setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, status: 'running' }))]);
+            const answer = await run(pending);
+            setItems((prev) => prev.map((i) => {
+              if (i.kind !== 'tool') return i;
+              const r = answer.toolResults.find((t) => t.id === i.id);
+              if (!r) return i;
+              const picture = answer.pictures?.[i.id];
+              return { ...i, status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}), ...(picture ? { images: [picture] } : {}) };
+            }));
+            if (abort.signal.aborted) break;
+            body = { context: turnContext(), scope: HOME_CHAT, ...whose, toolResults: answer.toolResults, ...(answer.images?.length ? { images: answer.images, message: answer.message } : {}) };
+            continue;
+          }
           // A browser tool acts on an app's open page, which this one is not: the model is told so, and goes on.
-          const pending: { id: string; name: string }[] = calls;
           setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, status: 'error', error: 'Works in its own app' }))]);
-          body = { context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose, toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
+          body = { context: turnContext(), scope: HOME_CHAT, ...whose, toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
         }
       } catch (e) {
         if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));

@@ -1,0 +1,10 @@
+{
+  "name": "@flow/browser-extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "FreeFlow Browser, the Chrome extension (README.md). Its version is manifest.json's; this file only runs its tests.",
+  "scripts": {
+    "test": "node --test sites.test.mjs"
+  }
+}

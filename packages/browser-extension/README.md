@@ -1,7 +1,18 @@
 # FreeFlow Browser (Chrome extension)
 
-Lets the FreeFlow assistant open and use web pages in the user's own browser, in a "FreeFlow agent" tab group.
-The page's side is `packages/docs/client/src/agent/browserBridge.ts`.
+Two things (design: `docs/specs/browser-extension.md`):
+
+- **A side panel.** The toolbar icon opens Chrome's side panel with the person's assistant. `panel.html` frames the
+  suite's `/home/browser` page (`packages/home/src/browser/`), signed in with the person's FreeFlow session. Each message
+  carries the tab in front, which `background.js` reads for it (`page`, only for the panel's frame and its key). The
+  agent may then read and screenshot that tab, nothing more. Stop is in the panel's footer and on the icon's right-click
+  menu.
+- **Web tools.** The assistant opens and uses pages in its own tabs, in a "FreeFlow agent" tab group. The page's side is
+  `packages/docs/client/src/agent/browserBridge.ts`.
+- **Sites the assistant may use** (`sites.js`). Before the assistant uses a site that is not on the list, the extension
+  asks (a card in the panel, else `ask.html` in a small window): Always, This session or Don't allow. A
+  `declarativeNetRequest` session rule blocks other sites' pages in the agent's tabs. The panel's **Settings** tab lists,
+  adds and removes sites. Tests: `pnpm --filter @flow/browser-extension test`.
 
 ## Two builds
 
@@ -12,7 +23,9 @@ The page's side is `packages/docs/client/src/agent/browserBridge.ts`.
 | Messaged by | app.freeflow.im, localhost, 127.0.0.1 | app.freeflow.im only |
 | `debugger` permission | yes (background-tab screenshots) | no (shows the tab for a moment) |
 
-Dev: `chrome://extensions` → Developer mode → Load unpacked → this folder.
+Dev: `chrome://extensions` → Developer mode → Load unpacked → this folder. The dev build's panel opens production by
+default; to use a local suite (`pnpm dev:suite`), open **Suite address (dev build)** at the bottom of the panel and
+enter `http://localhost:8787` (or your port). The store build always opens production.
 
 ## Releasing to the Chrome Web Store (unlisted)
 

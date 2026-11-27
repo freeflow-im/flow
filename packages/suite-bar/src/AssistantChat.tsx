@@ -1,18 +1,18 @@
 // The assistant's panel for Home and Admin (suiteChat.ts): the person's assistant by name and picture, the chat with
 // Markdown replies and tool lines, a box to write in, Stop and New chat; inside the suite bar's dock (AssistantDock).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useAssistantModel, useModelTooltip, useUsableAgents, type UsableAgent } from './AssistantDock';
 import { adminAddress } from '@flow/shared/addresses';
-import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
+import { HOME_CHAT, useSuiteAssistant, type SuiteChatOptions } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
 import { CHAT_IMAGE_TYPES, imageFiles, MAX_CHAT_IMAGES, prepareChatImage, type ChatImage } from './lib/chatImages';
 import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from './EmailApproval';
 import './assistant-chat.css';
 
 // The chat itself, for a page that shows the assistant's answer in its own place (Home's setup, docs/specs/onboarding.md §4).
-export { useSuiteAssistant, type ChatItem } from './suiteChat';
+export { useSuiteAssistant, type ChatItem, type SuiteChatOptions, type SuiteToolAnswer, type SuiteToolCall } from './suiteChat';
 
 /**
  * The pill and, opened, the panel, in the organization the bar selected: any agent the person may talk to (agents.md §6),
@@ -66,29 +66,35 @@ export function SuiteAssistant({ organizationId, page, prefer, context, app }: {
  * The same panel as a column of a page's own layout, always open and with no dock: the Build app page's (user-apps.md
  * §9.6), where the assistant is the main way to build. The page sizes it; there is no float, anchor or minimize.
  */
-export function SuiteAssistantColumn({ organizationId, page, context, intro, prompts }: {
+export function SuiteAssistantColumn({ organizationId, page, context, intro, prompts, options, composerTop, placeholder }: {
   organizationId: string | null;
   page: PromptPage;
   context?: Record<string, unknown>;
   /** What the empty chat says, and the prompts it offers, in place of the organization's (the page's own work). */
   intro?: string;
   prompts?: string[];
+  /** Context read when a message is sent, and a runner for browser tools (FreeFlow Browser's side panel). */
+  options?: SuiteChatOptions;
+  /** Shown just above the message box (the side panel's page chip). */
+  composerTop?: ReactNode;
+  /** The message box's placeholder, in place of "Message <name>…". */
+  placeholder?: string;
 }) {
   const agents = useUsableAgents(organizationId);
   const [picked, setPicked] = useState<string | null>(null);
   useEffect(() => setPicked(null), [organizationId]);
   const chosen = (picked ? agents?.find((a) => a.id === picked) : undefined) ?? agents?.find((a) => a.self) ?? null;
-  return <SuiteAssistantPanel organizationId={organizationId} page={page} agents={agents ?? []} chosen={chosen} onPick={setPicked} context={context} bare {...(intro ? { intro } : {})} {...(prompts ? { prompts } : {})} />;
+  return <SuiteAssistantPanel organizationId={organizationId} page={page} agents={agents ?? []} chosen={chosen} onPick={setPicked} context={context} bare {...(intro ? { intro } : {})} {...(prompts ? { prompts } : {})} {...(options ? { options } : {})} composerTop={composerTop} {...(placeholder ? { placeholder } : {})} />;
 }
 
-function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, context, bare = false, intro, prompts }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void; context?: Record<string, unknown>; bare?: boolean; intro?: string; prompts?: string[] }) {
+function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, context, bare = false, intro, prompts, options, composerTop, placeholder }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void; context?: Record<string, unknown>; bare?: boolean; intro?: string; prompts?: string[]; options?: SuiteChatOptions; composerTop?: ReactNode; placeholder?: string }) {
   const name = chosen?.displayName ?? 'Assistant';
   // The person's own assistant goes by no id (the routes' default); any other agent by its own.
   const agentId = chosen && !chosen.self ? chosen.id : null;
   // What the chosen agent runs on (its pin, else the organization's default): on hovering (or focusing) the name.
   const modelTip = useModelTooltip(useAssistantModel(organizationId, agentId));
   const avatarUrl = chosen?.avatarUrl ?? null;
-  const chat = useSuiteAssistant(organizationId, agentId, context);
+  const chat = useSuiteAssistant(organizationId, agentId, context, options);
   const orgPrompts = useSuggestedPrompts(organizationId, page);
   const suggestions = prompts ?? orgPrompts;
   const [draft, setDraft] = useState('');
@@ -187,7 +193,10 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
           ) : emailApprovalOf(item.name, item.result) ? (
             <EmailApprovalCard key={item.id} id={emailApprovalOf(item.name, item.result)!} organizationId={organizationId} />
           ) : (
-            <div key={item.id} className={`suite-chat-tool ${item.status}`}>{item.name.replace(/_/g, ' ')}{item.status === 'running' ? '…' : item.error ? ` · ${item.error}` : ''}</div>
+            <div key={item.id} className={`suite-chat-tool ${item.status}`}>
+              {item.name.replace(/_/g, ' ')}{item.status === 'running' ? '…' : item.error ? ` · ${item.error}` : ''}
+              {item.images?.map((src, j) => <a key={j} className="suite-chat-tool-picture" href={src} target="_blank" rel="noreferrer"><img src={src} alt={`Picture ${j + 1} the tool took`} /></a>)}
+            </div>
           ),
         )}
         {chat.running && chat.items[chat.items.length - 1]?.kind !== 'assistant' && <div className="suite-chat-thinking">Thinking…</div>}
@@ -204,6 +213,7 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
           {attachError && <span className="suite-chat-attach-error">{attachError}</span>}
         </div>
       )}
+      {composerTop}
       <form className="suite-chat-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <input
           ref={picker}
@@ -225,7 +235,7 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
           ref={input}
           value={draft}
           rows={2}
-          placeholder={`Message ${name}, or paste a screenshot`}
+          placeholder={placeholder ?? `Message ${name}, or paste a screenshot`}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={(e) => {
             const files = imageFiles(e.clipboardData);

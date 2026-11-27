@@ -235,3 +235,14 @@
   border-radius: 8px;
   display: block;
 }
+
+/* A picture a browser tool took (browser_screenshot in FreeFlow Browser's side panel), under its line. */
+.suite-chat-tool-picture {
+  display: block;
+  margin-top: 4px;
+}
+.suite-chat-tool-picture img {
+  max-width: 100%;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+}
