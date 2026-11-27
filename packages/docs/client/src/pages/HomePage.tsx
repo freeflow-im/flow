@@ -17,6 +17,7 @@ import { FileSearchButton } from '../components/FileSearch.tsx';
 import { FileLibrary, formatWhen, kindIcon, type LibraryItem } from '../components/FileLibrary.tsx';
 import { FileThumb } from '../components/FileThumb.tsx';
 import { foldersChanged } from '../components/DocsNav.tsx';
+import { FILE_MOVED, setDraggedFile } from '../libraryDrag.ts';
 import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
@@ -551,6 +552,14 @@ function FileList() {
     events.onmessage = () => void load();
     return () => events.close();
   }, [local, otherShown, folder]);
+  // A file dragged from the list to a folder of the suite's tree (DocsNav) moved: the list (and the tree) read again.
+  const loadNow = useRef(load);
+  loadNow.current = load;
+  useEffect(() => {
+    const moved = () => void loadNow.current();
+    window.addEventListener(FILE_MOVED, moved);
+    return () => window.removeEventListener(FILE_MOVED, moved);
+  }, []);
   // Back at a list, it is where it was scrolled to.
   useListingScroll(query, recents ? recentFiles !== null : favoritesShown ? favorites !== null : items !== null && listed === folder);
 
@@ -712,6 +721,8 @@ function FileList() {
         await api.moveToFolder(s.kind, s.id, placeAt(to));
         await load();
       }}
+      // The suite's folder tree beside the list (DocsNav) takes a file dragged from it, into a folder of the same root.
+      onDragFile={suite && !otherShown && !local ? (s) => setDraggedFile(s && { kind: s.kind, id: s.id, title: s.title, folder: s.folder ?? '', root: sharedRoot ? 'org' : 'me' }) : undefined}
       // The desktop app: a file dragged out of the list is the file itself to other apps (Finder, a video editor).
       onDragOut={local && !otherShown ? (s) => void api.dragOutLocal(s.kind, s.id).catch((e: Error) => setError(e.message)) : undefined}
       folderActions={(path) => [

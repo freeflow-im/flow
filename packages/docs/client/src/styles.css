@@ -7262,6 +7262,26 @@ a.landing-card {
   font-size: 12px;
   color: #5f6368;
 }
+/* A folder of the tree that would take the file being dragged over it (libraryDrag.ts), as in the list. */
+.docs-nav .dn-row.drop-target,
+.docs-nav .dn-row.drop-target:hover {
+  background: #e8f0fe;
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+.docs-nav .dn-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 0 6px;
+  border-radius: 8px;
+  background: #fce8e6;
+  color: #b3261e;
+}
+.docs-nav .dn-error button {
+  margin-left: auto;
+  color: inherit;
+}
 .docs-nav .dn-collapse {
   position: absolute;
   top: 12px;
