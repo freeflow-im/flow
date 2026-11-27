@@ -17,6 +17,7 @@ describe('the browser side panel page', () => {
     const tab = { id: 5, title: 'Docs', url: 'https://example.com/', readable: true };
     expect(panelMessage({ origin: `chrome-extension://${DEV}`, source: parent, data: { type: 'flow-panel', key: 'k', window: 3 } }, DEV, parent)).toEqual({ type: 'flow-panel', key: 'k', window: 3 });
     expect(panelMessage({ origin: `chrome-extension://${DEV}`, source: parent, data: { type: 'flow-tab', tab } }, DEV, parent)).toEqual({ type: 'flow-tab', tab });
+    expect(panelMessage({ origin: `chrome-extension://${DEV}`, source: parent, data: { type: 'flow-tab', tab: { ...tab, agent: true } } }, DEV, parent)).toEqual({ type: 'flow-tab', tab: { ...tab, agent: true } });
     expect(panelMessage({ origin: 'https://evil.example', source: parent, data: { type: 'flow-tab', tab } }, DEV, parent)).toBeNull();
     expect(panelMessage({ origin: `chrome-extension://${DEV}`, source: {}, data: { type: 'flow-tab', tab } }, DEV, parent)).toBeNull();
     expect(panelMessage({ origin: `chrome-extension://${DEV}`, source: parent, data: { type: 'flow-tab', tab: { id: 'x' } } }, DEV, parent)).toBeNull();

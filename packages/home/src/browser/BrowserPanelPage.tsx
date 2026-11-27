@@ -63,7 +63,7 @@ export function BrowserPanelPage() {
       {tab.favIconUrl ? <img src={tab.favIconUrl} alt="" /> : <span className="browser-panel-chip-dot" aria-hidden="true" />}
       <span className="browser-panel-chip-text">
         <strong>{tab.title || shortAddress(tab.url)}</strong>
-        <span>{!tab.readable ? 'This page can’t be read' : withPage ? shortAddress(tab.url) : 'Not sent with your message'}</span>
+        <span>{!tab.readable ? 'This page can’t be read' : !withPage ? 'Not sent with your message' : tab.agent ? `Assistant’s tab · ${shortAddress(tab.url)}` : shortAddress(tab.url)}</span>
       </span>
       {tab.readable && (
         <button type="button" onClick={() => setWithPage((w) => !w)} aria-label={withPage ? 'Send without this page' : 'Send with this page'} title={withPage ? 'Send without this page' : 'Send with this page'} data-testid="browser-panel-chip-toggle">

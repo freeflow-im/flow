@@ -164,7 +164,12 @@ needs to act, it opens the same address in its own tab with `browser_open`, whic
 it is on, `browser_click`, `browser_type`, `browser_scroll` and `browser_navigate` work on that tab too, and the chip
 shows that the agent is using it. It turns off when the turn ends.
 
-The extension enforces this, not the model: a tab the panel read (`page`) is remembered as shared, and only
+When the tab in front is one the agent opened itself (the person switched to it), it is not the person's tab: the
+`page` answer says `agentTab`, the chip says "Assistant's tab", and the agent may use every tool there. Asked to go
+somewhere else, it goes there in that tab with `browser_navigate` instead of opening another (found in testing,
+2026-11-26).
+
+The extension enforces this, not the model: a tab of the person's that the panel read (`page`) is remembered as shared, and only
 `browser_read` and `browser_screenshot` from the panel's frame may name it. A click or typing there fails with "Tab N is
 the user's own tab", and so does a read from a FreeFlow page in a normal tab (tested end to end, §7).
 

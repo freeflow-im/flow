@@ -740,6 +740,11 @@ describe('app context', () => {
     expect(text.match(/<\/page_text>/g)).toHaveLength(1);
     expect(text).toContain('browser_read with tab 42 and offset 20000');
     expect(text).toContain('not click, type or navigate in it');
+    // On one of the agent's own tabs it may use every tool, and goes to another page there rather than a new tab.
+    const own = renderContext({ page: 'home', browser: true, webPage: { tab: 42, agentTab: true, url: 'https://www.linkedin.com/messaging/', title: 'Messaging', text: 'x' } });
+    expect(own).toContain('(tab 42, one of your tabs)');
+    expect(own).toContain('use browser_navigate with tab 42 rather than opening a new tab');
+    expect(own).not.toContain('not click, type or navigate');
     // Without a page it is the home page as before.
     expect(renderContext({ page: 'home' })).toContain('on the home page');
   });

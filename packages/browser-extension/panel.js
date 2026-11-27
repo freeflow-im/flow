@@ -26,7 +26,8 @@ const readable = (url) => /^https?:\/\//.test(url ?? '') && !/^https:\/\/(chrome
 
 async function sendTab() {
   const [tab] = await chrome.tabs.query({ active: true, windowId });
-  post({ type: 'flow-tab', tab: tab ? { id: tab.id, title: tab.title ?? '', url: tab.url ?? '', ...(tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}), readable: readable(tab.url) } : null });
+  const { tabs: agentTabs = [] } = await chrome.storage.session.get('tabs');
+  post({ type: 'flow-tab', tab: tab ? { id: tab.id, title: tab.title ?? '', url: tab.url ?? '', ...(tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}), readable: readable(tab.url), agent: agentTabs.includes(tab.id) } : null });
 }
 
 addEventListener('message', (e) => {
@@ -48,7 +49,11 @@ async function showAgentTabs() {
   footer.hidden = !tabs.length;
   document.getElementById('agent-tabs').textContent = `${tabs.length} assistant tab${tabs.length === 1 ? '' : 's'} open`;
 }
-chrome.storage.session.onChanged.addListener((changes) => 'tabs' in changes && void showAgentTabs());
+chrome.storage.session.onChanged.addListener((changes) => {
+  if (!('tabs' in changes)) return;
+  void showAgentTabs();
+  void sendTab();
+});
 document.getElementById('stop').addEventListener('click', () => void chrome.runtime.sendMessage({ type: 'stop' }));
 void showAgentTabs();
 

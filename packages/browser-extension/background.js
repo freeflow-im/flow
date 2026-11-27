@@ -503,8 +503,10 @@ async function panelPage(msg, sender) {
   if (!tab?.id || !/^https?:/.test(tab.url ?? '')) throw new ToolError('The page in front cannot be read.');
   const page = await inPage(tab.id, readPage, [0, MAX_READ]);
   const [sel] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selectedText }).catch(() => [null]);
-  await shareTab(tab.id);
-  return { tab: tab.id, url: page.url, title: page.title, text: page.text, truncated: /\n\n\[\d+ more characters: browser_read with offset \d+\]$/.test(page.text), selection: sel?.result || undefined };
+  // The agent's own tab (the person is looking at one it opened): it may use every tool there, so it is not shared.
+  const mine = (await agentTabs()).has(tab.id);
+  if (!mine) await shareTab(tab.id);
+  return { tab: tab.id, agentTab: mine, url: page.url, title: page.title, text: page.text, truncated: /\n\n\[\d+ more characters: browser_read with offset \d+\]$/.test(page.text), selection: sel?.result || undefined };
 }
 
 chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {

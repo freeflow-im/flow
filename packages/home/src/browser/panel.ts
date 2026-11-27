@@ -15,6 +15,8 @@ export interface PanelTab {
   favIconUrl?: string;
   /** An http(s) page the extension may read (not chrome://, the Web Store or a new tab). */
   readable: boolean;
+  /** One of the assistant's own tabs (it opened it), which it may use with every tool. */
+  agent?: boolean;
 }
 
 /** What the panel page sends the frame. */
@@ -38,7 +40,7 @@ export function panelMessage(e: { origin: string; source: unknown; data: unknown
     const t = d.tab as Partial<PanelTab> | null | undefined;
     if (!t) return { type: 'flow-tab', tab: null };
     if (!Number.isInteger(t.id) || typeof t.url !== 'string') return null;
-    return { type: 'flow-tab', tab: { id: t.id!, title: String(t.title ?? ''), url: t.url, readable: !!t.readable, ...(typeof t.favIconUrl === 'string' ? { favIconUrl: t.favIconUrl } : {}) } };
+    return { type: 'flow-tab', tab: { id: t.id!, title: String(t.title ?? ''), url: t.url, readable: !!t.readable, ...(typeof t.favIconUrl === 'string' ? { favIconUrl: t.favIconUrl } : {}), ...(t.agent === true ? { agent: true } : {}) } };
   }
   return null;
 }
@@ -52,6 +54,7 @@ export async function readPanelPage(key: string, windowId: number): Promise<{ pa
   if (!a.ok) return { error: a.error ?? 'The page could not be read.' };
   const page: WebPageContext = {
     tab: Number(a.tab),
+    ...(a.agentTab === true ? { agentTab: true } : {}),
     url: String(a.url ?? ''),
     title: String(a.title ?? ''),
     text: String(a.text ?? '').slice(0, MAX_WEB_PAGE_TEXT),

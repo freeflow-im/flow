@@ -120,6 +120,8 @@ export interface BrowserReach {
 export interface WebPageContext {
   /** The extension's id for the tab: browser_read and browser_screenshot take it. */
   tab: number;
+  /** The tab is one the agent opened (in its tab group), not the person's own: every browser tool may use it. */
+  agentTab?: boolean;
   url: string;
   title: string;
   /** The page's text as the extension read it, at most MAX_WEB_PAGE_TEXT characters. */
