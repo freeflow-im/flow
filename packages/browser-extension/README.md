@@ -2,9 +2,9 @@
 
 Two things (design: `docs/specs/browser-extension.md`):
 
-- **A side panel.** The toolbar icon opens Chrome's side panel with the person's assistant. `panel.html` frames the
-  suite's `/home/browser` page (`packages/home/src/browser/`), signed in with the person's FreeFlow session. Each message
-  carries the tab in front, which `background.js` reads for it (`page`, only for the panel's frame and its key). The
+- **A side panel, per tab.** The toolbar icon opens Chrome's side panel with the person's assistant, for that tab only
+  (it hides on other tabs). `panel.html?tab=<id>` frames the suite's `/home/browser` page (`packages/home/src/browser/`),
+  signed in with the person's FreeFlow session. Each message carries the panel's tab, which `background.js` reads for it (`page`, only for the panel's frame and its key). The
   agent may then read and screenshot that tab, nothing more. Stop is in the panel's footer and on the icon's right-click
   menu.
 - **Web tools.** The assistant opens and uses pages in its own tabs, in a "FreeFlow agent" tab group. The page's side is

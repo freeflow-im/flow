@@ -11,12 +11,15 @@ The most likely reason is that the extension did nothing on its own. With a pane
 
 ## 1. What the person sees
 
-1. They click the FreeFlow icon in Chrome's toolbar. Chrome's side panel opens on the right of the window.
+1. They click the FreeFlow icon in Chrome's toolbar. Chrome's side panel opens on the right, **for that tab only**
+   (operator request 2026-11-27: the panel belongs to its tab, not to the whole window).
 2. The panel shows their assistant's conversation: the same one as in the FreeFlow suite (§4).
-3. Above the message box is a **page chip**: the favicon and title of the tab in front, for example
-   "📄 How R2 pricing works — developers.cloudflare.com". It changes when they switch tabs.
+3. Above the message box is a **page chip**: the favicon and title of the panel's tab, for example
+   "📄 How R2 pricing works — developers.cloudflare.com". It follows that tab as it goes to other pages.
 4. They type "Summarize this page" and send. The assistant answers in the panel, streaming, as it does in the suite.
-5. The panel stays open when they change tabs. Each message is about the tab in front when it is sent.
+5. Switching to another tab hides the panel; switching back shows it again, as it was. Another tab can have its own
+   panel (click the icon there). Each message is about the panel's own tab. Every panel shows the same conversation
+   (the home chat, §3.1), loaded when it opens.
 
 ```
 ┌──────────────────────────────────┐
@@ -99,7 +102,7 @@ build with a person's own settings. Check both by hand once the dev build has a 
 
 ### 3.1 What is sent
 
-When the person sends a message, the frame asks the extension for the tab in front of the panel's window:
+When the person sends a message, the frame asks the extension for the panel's own tab:
 
 ```
 panel page → frame: { type: 'flow-panel', key, window }      (postMessage, to the suite's origin)
@@ -147,8 +150,8 @@ the extension reads the tab in front, but only in this case:
 
 - The request comes from the panel's own frame: it has no `sender.tab` (§2, spike findings).
 - The panel page makes a random `key` each time it opens, keeps it in the extension's session storage, and gives it to
-  the frame by `postMessage` (never in an address). The extension answers `page` only with that key, and only for the
-  window the panel is open in.
+  the frame by `postMessage` (never in an address). The extension answers `page` only with that key, and only with the
+  tab that panel belongs to (session storage `panelKeys`: key → tab).
 - So another FreeFlow page, or a turn started in the suite, cannot read the person's tabs.
 - It reads only when the person sends a message, never in the background.
 
@@ -184,7 +187,7 @@ or goes to a site that is not on it, the extension asks the person: **Always**, 
 - **A site** is a host name without `www.`; a rule covers its subdomains (`linkedin.com` covers `uk.linkedin.com`).
   "Always" rules are in the extension's local storage; "This session" rules in session storage, which Chrome clears when
   it quits. A refusal is not remembered: the next try asks again. The model is told not to retry unless asked.
-- **Where it asks:** a card at the top of the side panel when one is open, else a small window (`ask.html`). Both are
+- **Where it asks:** a card at the top of the side panel when the tab in front has one, else a small window (`ask.html`). Both are
   the extension's own pages: no web page or FreeFlow page can answer. With no answer in 2 minutes, the call fails and
   the model is told so.
 - **Settings** (a tab in the panel) lists the rules, each with Remove, and adds one (Always or This session).

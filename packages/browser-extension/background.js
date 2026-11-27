@@ -97,6 +97,9 @@ chrome.tabs.onRemoved.addListener(async (id) => {
   if (set.delete(id)) await saveTabs(set);
   const shared = await sharedTabs();
   if (shared.delete(id)) await chrome.storage.session.set({ shared: [...shared] });
+  const { panelKeys = {} } = await chrome.storage.session.get('panelKeys');
+  const kept = Object.fromEntries(Object.entries(panelKeys).filter(([, tab]) => tab !== id));
+  if (Object.keys(kept).length !== Object.keys(panelKeys).length) await chrome.storage.session.set({ panelKeys: kept });
 });
 
 /** Stop: close every tab the agent opened. */
@@ -106,9 +109,18 @@ async function stopAgent() {
   if (set.size) await chrome.tabs.remove([...set]).catch(() => {});
 }
 
-// The toolbar button opens the side panel; its right-click menu has Stop, for when the panel is closed.
+// The toolbar button opens the side panel for its own tab (a tab-specific panel): it hides when the person switches to
+// another tab and comes back with its tab. There is no panel for the whole window. The button's right-click menu has
+// Stop, for when no panel is open.
 const STOP_MENU = 'stop-agent';
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+chrome.sidePanel.setOptions({ enabled: false }).catch(() => {});
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab?.id) return;
+  // Not awaited: open() must run inside the click's gesture, and the two calls reach Chrome in this order.
+  chrome.sidePanel.setOptions({ tabId: tab.id, path: `panel.html?tab=${tab.id}`, enabled: true }).catch(() => {});
+  chrome.sidePanel.open({ tabId: tab.id }).catch((e) => console.warn('FreeFlow: open the side panel', e));
+});
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: STOP_MENU, title: 'Stop the assistant and close its tabs', contexts: ['action'] }, () => void chrome.runtime.lastError);
 });
@@ -427,9 +439,12 @@ async function askPerson(site, action) {
   if (!ask) {
     ask = { id: crypto.randomUUID(), site, action, at: Date.now() };
     await chrome.storage.session.set({ asks: [...asks, ask] });
-    const panels = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] }).catch(() => []);
+    // A panel shows the card only on its own tab: with none on the tab in front, the small window asks.
+    const { panelKeys = {} } = await chrome.storage.session.get('panelKeys');
+    const [front] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const panelInFront = !!front && Object.values(panelKeys).includes(front.id);
     const windows = await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [chrome.runtime.getURL('ask.html')] }).catch(() => []);
-    if (!panels.length && !windows.length) await chrome.windows.create({ url: chrome.runtime.getURL('ask.html'), type: 'popup', width: 460, height: 320, focused: true }).catch(() => {});
+    if (!panelInFront && !windows.length) await chrome.windows.create({ url: chrome.runtime.getURL('ask.html'), type: 'popup', width: 460, height: 320, focused: true }).catch(() => {});
   }
   // Polled rather than awaited on an event: each storage call keeps this worker awake while it waits.
   const end = Date.now() + ASK_TIMEOUT_MS;
@@ -618,13 +633,14 @@ function selectedText() {
   return String(globalThis.getSelection?.()?.toString() ?? '').slice(0, 4000);
 }
 
-/** The tab in front of the panel's window, read for one message: its address, title, selection and text. */
+/** The panel's own tab, read for one message: its address, title, selection and text. */
 async function panelPage(msg, sender) {
   if (!fromPanel(sender)) throw new ToolError('Only the FreeFlow side panel may read the page in front.');
-  const windowId = Number(msg.window);
-  const { [`panel:${windowId}`]: key } = await chrome.storage.session.get(`panel:${windowId}`);
-  if (!key || msg.key !== key) throw new ToolError('The side panel is not open in that window.');
-  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  // Each panel belongs to one tab (panel.js keeps its key → tab in session storage).
+  const { panelKeys = {} } = await chrome.storage.session.get('panelKeys');
+  const tabId = typeof msg.key === 'string' ? panelKeys[msg.key] : undefined;
+  if (!tabId) throw new ToolError('The side panel is not open.');
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab?.id || !/^https?:/.test(tab.url ?? '')) throw new ToolError('The page in front cannot be read.');
   const page = await inPage(tab.id, readPage, [0, MAX_READ]);
   const [sel] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selectedText }).catch(() => [null]);
