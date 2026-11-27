@@ -7,8 +7,8 @@ map, not a duplicate.
 
 If you only want to run Flow locally, you want
 [Local development](#local-development) below, or the quick start in
-[README.md](README.md). If you want to run Flow on your own server, you want
-[DEPLOYMENT.md](DEPLOYMENT.md).
+[README.md](README.md). If you want to run Flow on your own Cloudflare account,
+you want [DEPLOYMENT.md](DEPLOYMENT.md).
 
 | Artifact | Build | Release | Automatic? |
 |---|---|---|---|

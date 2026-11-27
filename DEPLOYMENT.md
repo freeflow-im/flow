@@ -1,335 +1,229 @@
-# Self-hosting Flow
+# Deploying FreeFlow on Cloudflare
 
-Flow is designed to be cheap and boring to run: **one Node process**, a
-**Postgres** database, and a **NATS** server. The web client is built to static
-files and served by that same Node process, so the API, the WebSocket gateway,
-and the web app all live on one origin — no CORS, no second web server, no
-Electron, nothing to orchestrate.
+FreeFlow runs on Cloudflare. The whole suite is **one Worker**, `packages/edge`. Each app (Chat, Docs,
+Mail, Calendar, Contacts, Meet, the assistant and the rest) is a Durable Object inside it with its own
+SQLite storage. Files are in R2, and the web clients are the Worker's static assets. There is no
+database server and no message bus to run.
 
-This guide gets you from a clean machine to a working instance. If you just
-want an account without running anything, use the hosted service at
-<https://app.freeflow.im>.
+This guide takes you from a Cloudflare account to a running instance on your own domain. If you only
+want an account, use the hosted service at <https://app.freeflow.im>. If you only want to try the code,
+`pnpm dev:suite` runs the same Worker on your machine ([BUILD.md](BUILD.md) § Local development).
 
-> Licensing: Flow is free to use and free to host under the
-> [FSL-1.1-ALv2](LICENSE.md). Read it before offering Flow commercially.
+> **Read this first.** `packages/edge/wrangler.toml` is the configuration of our own deploy. Its routes,
+> hostnames and several of its settings name `freeflow.im`. Section 3 lists what you must change. We
+> deploy from that file on every merge, but we have not yet run these steps on a second, empty
+> Cloudflare account, so expect to adjust something.
+
+> Licensing: FreeFlow is free to use and free to host under the [FSL-1.1-ALv2](LICENSE.md). Read it
+> before you offer FreeFlow commercially.
 
 ---
 
-## 1. What you're deploying
+## 1. What you are deploying
 
 ```
-                    ┌──────────────────────────────┐
-   browser  ──────► │  Flow server (Node ≥ 22)     │
-   macOS/iOS app ─► │  REST + WebSocket + web app  │
-                    │  one process, one port       │
-                    └───────┬──────────────┬───────┘
-                            │              │
-                     ┌──────▼─────┐  ┌─────▼──────┐
-                     │ Postgres 16│  │ NATS 2.10  │
-                     │ (your data)│  │ (events)   │
-                     └────────────┘  └────────────┘
-                                     file blobs → local disk
-                                                  or S3/R2
+your zone on Cloudflare (records proxied)
+  app.example.com ─→ Worker
+      ├─ Durable Objects   Directory (accounts and organizations), Org (Chat), Docs, Mail,
+      │                    Calendar, Contacts, Events, Assistant, AppStore, MeetingAgent
+      ├─ Static assets     every web client's build, at /chat, /docs, /mail, /calendar, …
+      ├─ R2                files and attachments
+      ├─ Queues            wake jobs, account provisioning
+      ├─ Container         OCR for scanned PDFs (optional)
+      └─ Images, Browser   thumbnails and link previews, PDF export
 ```
 
-Both dependencies are required. Postgres holds everything durable (messages
-are encrypted at rest); NATS fans real-time events out to connected clients and
-the server refuses to boot without it.
+Each Durable Object applies its own schema migrations when it starts. A deploy is one command and needs
+no migration step.
 
 ## 2. Requirements
 
-| | |
-|---|---|
-| Node | 22 or newer |
-| pnpm | 10 (`corepack enable && corepack prepare pnpm@10 --activate`) |
-| Postgres | 16 or newer |
-| NATS | 2.10 (core NATS — JetStream is not used) |
-| Disk | only if you keep file uploads on local disk (see §6) |
+- A Cloudflare account on the **Workers Paid** plan. Durable Objects with SQLite storage, Queues, the
+  dynamic Worker loader (custom apps) and Containers (PDF OCR) need it.
+- A domain whose DNS is on Cloudflare.
+- Node 22 or later and pnpm 10.
+- Docker, only if you keep the PDF OCR container (section 3).
 
-## 3. Quick start (single machine)
+## 3. Change the configuration to yours
 
-Start the two dependencies. The repo ships a compose file that runs both:
+Edit `packages/edge/wrangler.toml`. Every setting has a comment there that explains it.
+
+**The Worker and its hosts**
+
+| Setting | Ours | Set it to |
+|---|---|---|
+| `name` | `freeflow-edge` | any name |
+| `routes` | `app.freeflow.im`, `edge.freeflow.im`, the two plugin hosts, `*.flowtoo.org` | one entry: `{ pattern = "app.example.com", custom_domain = true }` |
+| `ASSET_HOSTS` | `app.freeflow.im,edge.freeflow.im` | your host |
+| `PORTED_HOSTS` | `edge.freeflow.im,app.freeflow.im` | your host |
+| `WEB_URL_BASE`, `FLOW_WEB_URL` | `https://app.freeflow.im` | `https://app.example.com` |
+| `FLOW_HANDOFF_RETURN_URLS` | `flow://signin,https://app.freeflow.im/` | the same, with your host |
+| `PLUGIN_HOSTS` | the ChatGPT plugin's hosts | remove it |
+| `ORIGIN_URL` | `https://origin.freeflow.im` | see "The origin" below |
+
+**Parts you can leave out at first**
+
+| Part | In `wrangler.toml` | Without it |
+|---|---|---|
+| Hosted mail | `MAIL_PROVIDER`, `MXROUTE_SERVER` | Remove both. People still connect their own mail accounts; nobody gets a hosted mailbox. |
+| Meet and huddles | `RTK_ACCOUNT_ID`, `RTK_APP_ID` | Remove both, or set your own RealtimeKit app and the `RTK_API_TOKEN` secret. Without the token Meet is off. |
+| Custom apps' screens | `APPS_DOMAIN`, the `*.flowtoo.org` route | Remove both, or use a second domain of your own with a proxied wildcard record. Apps' screens need a domain apart from the suite's. |
+| PDF OCR | the `[[containers]]` block and the `PDF_OCR` binding | Remove them and Docker is not needed. PDFs that have a text layer still import. |
+
+**The origin.** `ORIGIN_URL` is our older Node server on AWS. The Worker sends it any path it does not
+answer itself, and today that is only the ChatGPT plugin and a few old pages. A new instance has no
+origin. Local development points `ORIGIN_URL` at a dead port and the suite works, so do the same:
+set it to an address that answers nothing. A path the Worker does not know then fails instead of
+reaching our server.
+
+## 4. Create the resources
+
+From `packages/edge`, after `pnpm exec wrangler login`:
 
 ```sh
-git clone https://github.com/freeflow-im/flow.git
-cd flow
-cd packages/infra && docker compose up -d && cd ../..
+pnpm exec wrangler r2 bucket create flow-files
+pnpm exec wrangler queues create flow-jobs
+pnpm exec wrangler queues create flow-jobs-dlq
+pnpm exec wrangler queues create flow-provisioning
+pnpm exec wrangler queues create flow-provisioning-dlq
 ```
 
-That gives you Postgres on host port **5442** and NATS on **4222**. (Port 5442
-rather than 5432 so it won't collide with a Postgres you already run.) If you
-have your own Postgres and NATS, skip this and point `DATABASE_URL` /
-`NATS_URL` at them instead.
+Use another bucket name if you like, and change `bucket_name` under `[[r2_buckets]]` to match.
+The Durable Objects need no step: the `[[migrations]]` blocks create them on the first deploy.
 
-Install, build, and run:
+## 5. Set the secrets
+
+Each one is `pnpm exec wrangler secret put <NAME>` in `packages/edge`.
+
+**Required**
+
+| Secret | What it is |
+|---|---|
+| `FLOW_DATA_KEY` | Seals Chat's messages and files, and the passwords of connected mail and calendar accounts. Make it once with `openssl rand -base64 32` (as local development does) and **keep a copy**: with a different key the stored data cannot be read. |
+
+**Email that the suite sends** (sign-in codes, invitations). Without these, each link is written to
+the Worker's log instead of being sent, which is enough for a first sign-in (`wrangler tail`).
+
+| Secret | What it is |
+|---|---|
+| `EMAIL_API_TOKEN` | A Cloudflare API token with Email Sending: Edit |
+| `CLOUDFLARE_ACCOUNT_ID` | Your account id |
+| `EMAIL_FROM` | The sender address, on a domain set up for Email Sending |
+| `INVITE_URL_BASE` | The address invitation links start with, `https://app.example.com` |
+
+**Direct file uploads and downloads** (presigned R2 addresses)
+
+| Secret | What it is |
+|---|---|
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | An R2 API token for the bucket |
+| `R2_ENDPOINT` | `https://<account id>.r2.cloudflarestorage.com` |
+| `R2_BUCKET` | The bucket's name |
+
+The browser sends and fetches files straight from R2, so the bucket also needs a CORS policy that
+allows your host. [docs/design/STORAGE.md](docs/design/STORAGE.md) explains it.
+
+**Optional**
+
+| Secret | Turns on |
+|---|---|
+| `ANTHROPIC_API_KEY` | The built-in assistant model. `OPENAI_API_KEY` and `OPENROUTER_API_KEY` add the other providers. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Sign in with Google, and Google Calendar |
+| `APPLE_AUDIENCE` | Sign in with Apple from the native apps |
+| `RTK_API_TOKEN` | Meet and huddles (Cloudflare RealtimeKit) |
+| `FLOW_PUSH_DRIVER`, `FLOW_APNS_KEY`, `FLOW_APNS_KEY_ID`, `FLOW_APNS_TEAM_ID` | Push notifications to the iOS app |
+| `MXROUTE_USERNAME`, `MXROUTE_API_KEY` | Hosted mail on MXRoute |
+| `CLOUDFLARE_DNS_TOKEN`, `CLOUDFLARE_DNS_ZONE_ID` | DNS records for each organization's own host |
+
+`EDGE_ORIGIN_SECRET` is only for an origin, so a new instance does not need a real value.
+
+`packages/edge/scripts/put-secrets.sh` copies our secrets from AWS Parameter Store. It is for our own
+deploy and is of no use on another account.
+
+## 6. Build and deploy
+
+From the repository root:
 
 ```sh
 pnpm install
-pnpm build                        # builds shared, server, and the web client
-
-cd packages/server
-pnpm start                        # → http://127.0.0.1:8787
+pnpm --filter @flow/shared build      # the app manifests, which the next steps read
+pnpm dev:suite --build                # builds every web client and fills public/; stop it once it has started
+cd packages/edge
+pnpm exec wrangler deploy
 ```
 
-Open <http://127.0.0.1:8787>. **Database migrations run automatically at every
-boot** — there is no separate migrate step to remember, and shipping a schema
-change is just restarting the server.
+`dev:suite --build` is the simplest way to build every client for its own path (`/chat`, `/docs`,
+`/mail` and so on). It then runs `packages/edge/scripts/assemble.mjs`, which copies the builds into
+`packages/edge/public/`. A client that has no build is left out, and its path then answers "not
+built into this deploy".
 
-Health check for your process supervisor or load balancer:
+`wrangler deploy` uploads the Worker and its assets, creates the custom domain and its DNS record, and
+builds the OCR container if you kept it.
+
+Check it:
 
 ```sh
-curl http://127.0.0.1:8787/healthz     # → {"ok":true}
+curl https://app.example.com/edge/health        # {"ok":true}
 ```
 
-## 4. Configuration
+## 7. The first account
 
-Everything is environment variables. The server also reads a `.env` file at the
-repo root if one exists — real environment variables always win over it.
+Open `https://app.example.com/signup`. Sign-up is confirmed by email. If you have not set up email
+yet, run `pnpm exec wrangler tail` in `packages/edge` and take the link from the log. Then make
+your organization and invite the others from it.
 
-**The defaults are tuned for local development.** For a real deployment you
-need at least the four variables in the first block.
+## 8. Deploying on every merge
 
-### Required for a real deployment
+Our deploy is GitHub Actions: a merge to `main` runs `flow-aws-deploy.yml`, which builds the clients
+and calls `deploy-edge.yml` to run `wrangler deploy`. Those workflows also deploy our AWS origin and
+copy files from its image, so they will not run unchanged in a fork.
 
-| Variable | Set it to |
-|---|---|
-| `DATABASE_URL` | Your Postgres connection string. Defaults to the docker-compose database. |
-| `HOST` | `0.0.0.0` (or `::` for IPv6). **The default is `127.0.0.1`, which only accepts connections from the same machine** — this is the most common reason a fresh deployment appears unreachable. |
-| `FLOW_WEB_URL` | The public URL users reach you at, e.g. `https://chat.example.com`. This is baked into signup and password-reset links, so if it's wrong those emails point at the wrong host. |
-| `FLOW_DATA_KEY` | Base64 32-byte key: `openssl rand -base64 32`. See the warning below. |
+For your own pipeline, run the commands of section 6 with two secrets set in the environment:
 
-> ### ⚠️ About `FLOW_DATA_KEY`
-> Messages and files are AES-256-GCM encrypted at rest with this key. **If you
-> lose it, every message and file in your database is permanently unreadable —
-> there is no recovery path.** Back it up somewhere other than the server, and
-> treat it like a root credential.
->
-> If you leave it unset the server generates one on first boot and writes it to
-> `packages/server/.keys/data.key.json` (mode 600). That's fine for a laptop,
-> but it means the key lives on the same disk as everything else — set the
-> variable explicitly for anything you care about.
+- `CLOUDFLARE_API_TOKEN`: a token with Workers Scripts: Edit and Workers Routes: Edit, plus DNS: Edit
+  and Zone: Read on your zone. Add the account's Containers: Edit if you kept PDF OCR.
+- `CLOUDFLARE_ACCOUNT_ID`
 
-### Commonly useful
+Build the clients with `pnpm -r build` there instead of `dev:suite --build`, with each client's
+`BASE_PATH` set as `scripts/dev-suite.mjs` sets it.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `8787` | Port to listen on |
-| `NATS_URL` | `nats://127.0.0.1:4222` | NATS server |
-| `LOG_LEVEL` | pino default | `debug`, `info`, `warn`, … |
-| `FLOW_MAX_FILE_MB` | `500` | Upload cap (direct-to-object-storage path only) |
-| `INVITE_URL_BASE` | `flow://invite/` | Prefix for invite links. The default deep-links into the native app; set it to `https://your-host/invite/` if your users are on the web. |
-| `FLOW_REDIRECT_FROM_HOSTS` | empty (off) | Comma-separated hostnames to 302 onto `FLOW_WEB_URL`. Use this when you change domains and the old hostname still points at this server — browsers and installed apps migrate themselves before you drop the DNS. `/v1` and `/api` are exempt on purpose: a 302 turns a POST into a GET and a WebSocket upgrade can't follow one, so old clients keep working on the old hostname until it goes away. |
+## 9. Operating it
 
-### Email
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `FLOW_EMAIL_DRIVER` | `dev` | `dev` writes each email to `packages/server/.emails/*.json` and logs the link. `cloudflare` sends for real. |
-| `FLOW_EMAIL_FROM` | `noreply@mail.freeflow.im` | Sending address — change this |
-| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_KEY` | — | Required when the driver is `cloudflare` |
-
-Cloudflare Email Service is the only real sending driver implemented today. If
-you use a different provider you'll need to add a driver — it's a small
-interface (`send({to, subject, text})`) in `packages/server/src/email/index.ts`,
-deliberately kept to one method so adding SES/Postmark/SMTP is a contained
-change. See §5 for how to bootstrap without any email at all.
-
-### Push notifications (iOS)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `FLOW_PUSH_DRIVER` | `dev` | `dev` writes each push to `packages/server/.push/*.json` and logs it. `apns` sends for real — not implemented yet. |
-| `FLOW_APNS_KEY` | — | base64 of the `.p8` APNs Auth Key |
-| `FLOW_APNS_KEY_ID` | — | 10-char key id naming that `.p8` |
-| `FLOW_APNS_TEAM_ID` | — | Apple Developer team id |
-| `FLOW_APNS_TOPIC` | `im.freeflow.app` | APNs topic — the app's bundle id. A device that registered under a different bundle id wins over this. |
-| `FLOW_APNS_ENV` | `sandbox` | Fallback APNs environment; the per-device `environment` wins over it. TestFlight builds are `production`. |
-
-The dev driver's files are exactly what `xcrun simctl push <device> <file>`
-takes, so you can replay any push into a simulator without an Apple account.
-
-### Sign in with Google (optional)
-
-| Variable | Purpose |
-|---|---|
-| `GOOGLE_CLIENT_ID` | OAuth 2.0 **Web** client id. Unset = the Google button is hidden everywhere and nothing else changes. |
-| `FLOW_GOOGLE_REQUIRE_HD` | Defaults on. Set `0` if your org has a custom domain but no Google Workspace. |
-
-In Google Cloud → APIs & Services → Credentials, create a **Web application**
-OAuth client with your public URL as an authorized JavaScript origin. No
-redirect URI is needed — Flow uses the ID-token flow.
-
-## 5. Creating the first account
-
-Registration is email-first by design: you enter an address, and the account is
-only created by whoever clicks the emailed link. That means **a brand-new
-instance with no working email still needs that link** to bootstrap its first
-user.
-
-With the default `dev` email driver you don't need a mail provider — the link
-is written to disk and printed to the log:
+All from `packages/edge`:
 
 ```sh
-# after submitting your address in the web UI:
-tail -f packages/server/.emails/*.json
-# or just watch the server output for:
-#   [email:dev] to=you@example.com subject="Finish creating your Flow account" link=https://...
+pnpm exec wrangler tail                # live logs
+pnpm exec wrangler deployments list    # what is deployed
+pnpm exec wrangler rollback            # back to the previous version
+pnpm exec wrangler queues list         # look for messages in the -dlq queues
 ```
 
-Paste that link into your browser to set your name and password. The first
-user to register creates their own workspace; the database ships empty with no
-fixtures or seed data.
+Stored logs are in the Cloudflare dashboard under Workers & Pages › your Worker › Logs
+(`[observability]` is on in `wrangler.toml`).
 
-Once you're in, switch `FLOW_EMAIL_DRIVER` to `cloudflare` (or your own driver)
-so everyone else can sign up normally — the dev driver never sends anything and
-leaves plaintext signup links on disk, so don't leave it on in production.
+**Upgrading.** Pull, build and deploy again (section 6). Durable Objects migrate themselves on their
+first request after the deploy.
 
-## 6. File storage
+**Rollback.** `wrangler rollback` puts the previous code back. It does not undo a storage migration
+that the newer version already applied.
 
-Uploads are encrypted before storage either way. Pick a driver:
+**What to keep safe**
 
-**Local disk** (default) — blobs go under `FLOW_FILE_DIR`
-(`packages/server/.files` by default). Simplest option; make sure it's on
-persistent storage and included in your backups. Uploads and downloads are
-proxied through the server.
+- `FLOW_DATA_KEY`. Losing it loses the sealed data.
+- The R2 bucket. It holds every uploaded file.
+- The Durable Objects' storage is kept by Cloudflare. There is no dump command for the whole
+  instance today, so plan backups around what each app can export.
 
-**S3-compatible object storage** — set `FLOW_BLOB_DRIVER=r2`. Clients then
-upload and download directly against presigned URLs, so large files never pass
-through your server's memory. Built against Cloudflare R2 but it's the plain S3
-API.
+## 10. Native clients
 
-| Variable | Purpose |
-|---|---|
-| `FLOW_BLOB_DRIVER` | `r2` to enable object storage; unset/`local` for disk |
-| `CLOUDFLARE_S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-| `CLOUDFLARE_ACCESS_KEY_ID`, `CLOUDFLARE_SECRET_ACCESS_KEY` | S3 API token pair |
-| `FLOW_R2_BUCKET` | Bucket name (default `flow-files`) |
-
-**You must set a CORS policy on the bucket.** Browsers preflight the presigned
-uploads, so without it web uploads fail while the native apps keep working —
-a confusing failure to debug:
-
-```sh
-aws s3api put-bucket-cors --bucket flow-files \
-  --endpoint-url $CLOUDFLARE_S3_ENDPOINT \
-  --cors-configuration '{"CORSRules":[{
-    "AllowedOrigins":["https://chat.example.com"],
-    "AllowedMethods":["GET","PUT","HEAD"],
-    "AllowedHeaders":["content-type","range"],
-    "ExposeHeaders":["content-length","content-type","content-range","etag"],
-    "MaxAgeSeconds":3600}]}'
-```
-
-Already have files on local disk and want to move them? Set
-`FLOW_MIGRATE_BLOBS=1` for exactly one boot — it decrypts and copies everything
-to object storage (idempotent; watch for `blob migration to R2 finished` in the
-log), then remove the variable.
-
-## 7. Putting it on the internet
-
-Terminate TLS at a reverse proxy in front of the Node process. The only thing
-Flow needs beyond a normal HTTP proxy is **WebSocket upgrade support on
-`/v1/ws`** — without it the app loads but never receives live messages, which
-looks like a broken app rather than a proxy misconfiguration.
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name chat.example.com;
-    # ssl_certificate ... ;
-
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade    $http_upgrade;   # required for /v1/ws
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host       $host;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 3600s;                    # don't cut idle sockets
-    }
-}
-```
-
-Caddy needs no WebSocket configuration at all:
-
-```
-chat.example.com {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-Run the server itself under systemd, Docker, or whatever supervisor you already
-use — it's a plain `node packages/server/dist/index.js`, it exits non-zero on
-fatal errors, and it shuts down cleanly on SIGTERM.
-
-### As a Docker image
-
-[`packages/server/deploy/aws/Dockerfile`](packages/server/deploy/aws/Dockerfile)
-builds the server and the web client into one image (run
-`docker build -f packages/server/deploy/aws/Dockerfile .` from the repository
-root). It listens on `0.0.0.0:8787`, runs as an unprivileged user, has a
-`HEALTHCHECK` on `/healthz` and needs the variables from §4, with
-`DATABASE_URL` and `NATS_URL` pointing at your Postgres and NATS.
-
-The hosted instance at app.freeflow.im no longer runs this image: since
-2026-11-03 it is the Cloudflare Worker in `packages/edge` ([BUILD.md](BUILD.md)).
-The image still runs on one AWS instance, with Postgres and NATS as containers
-beside it and Caddy in front, as the origin behind the Worker that serves the
-legacy ChatGPT plugin:
-[`packages/docs/deploy/aws/template.yaml`](packages/docs/deploy/aws/template.yaml)
-and its README.
-
-## 8. Native clients
-
-The macOS app is built pointing at a server URL, so a self-hosted instance needs
-its own build:
-
-```sh
-cd apps/macos
-FLOW_SERVER_URL=https://chat.example.com tools/make-app.sh   # → dist/Flow.app
-```
-
-Sessions and caches are isolated per server, so a Mac can run a build for your
-instance alongside one for the hosted service without them interfering.
-
-Currently the iOS app is pinned to the standard server. We are working on making
-the server URL configurable so that you can use the app with your custom instance.
-
-## 9. Upgrading
-
-```sh
-git pull
-pnpm install
-pnpm build
-# restart the server — migrations apply automatically on boot
-```
-
-Migrations are additive `.sql` files in
-`packages/server/src/db/migrations/`. Read [CHANGELOG.md](CHANGELOG.md) before
-upgrading; anything needing operator action is called out there.
-
-## 10. Backups and what to keep
-
-Three things, and you need all three to restore:
-
-1. **The Postgres database** — every message, channel, and account.
-2. **`FLOW_DATA_KEY`** — without it a database backup restores to unreadable
-   ciphertext. Store it separately from the database dump.
-3. **File blobs** — `FLOW_FILE_DIR` on disk, or your bucket.
+The macOS and iOS apps are built and released apart from the suite, and a merge does not ship them.
+[BUILD.md](BUILD.md) has the commands. `GET /download/mac` serves the Mac app from the R2 key
+`downloads/Flow.dmg`, and the app's update feed is under `downloads/mac/`.
 
 ## Reference
 
-- [`docs/ops/DEPLOYMENT.md`](docs/ops/DEPLOYMENT.md) — the runbook for the
-  hosted instance at app.freeflow.im. Specific to our infrastructure, but a
-  worked example of a real production setup: DNS, certificates, and the
-  gotchas we hit along the way.
-- [`packages/server/src/config.ts`](packages/server/src/config.ts) — the
-  authoritative list of every setting and its default.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — running Flow for development rather than
-  for real use.
-
-Stuck? Open an [issue](https://github.com/freeflow-im/flow/issues) or ask in
-[Discussions](https://github.com/freeflow-im/flow/discussions).
+- [BUILD.md](BUILD.md): every artifact, how it is built and how it is released.
+- [docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md): the operator's notes for our own production,
+  including the AWS origin.
+- [docs/specs/cloudflare-migration.md](docs/specs/cloudflare-migration.md): how the suite moved to the
+  Worker, and what is still on the origin.
+- `packages/edge/wrangler.toml`: every binding and setting, each with its explanation.
