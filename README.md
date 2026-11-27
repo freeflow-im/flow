@@ -1,305 +1,159 @@
-## 👋 Welcome!
+# FreeFlow
 
-The world of software development is changing rapidly. The advent of AI coding agents means that software can now be developed largely without writing any code by hand. 
+**FreeFlow** is one workspace for a team and its AI agents: mail, calendar, chat, docs, meetings,
+custom apps, and agents that work in all of them. It is open source, free to use at
+[app.freeflow.im](https://app.freeflow.im), and you can run it yourself.
 
-**Flow** is a recursive project aiming to discover good ways to help humans and AI colloborate on software development.
+![Tour of FreeFlow: mail, calendar, chat, docs, custom apps and agents](docs/images/tour-of-freeflow.png)
 
-![Flow — team chat for the age of AI](docs/images/flow-web-general.png)
+This repository is called _Flow_ because the project started as a team chat app. It is now the whole
+FreeFlow suite, and almost all of it has been written by coding agents.
 
-Our goals are to:
+## What is in the workspace
 
-1. Provide a communication space for people interested in "agentic coding" to collaborate. Just join the workspace and meet fellow devs.
-2. Build a software layer that is good for managing coding agents.
-3. Use coding agents to build and improve this software layer.
-4. Discover effective mechanisms for collaborating on AI-driven development.
+| App | What it does |
+|---|---|
+| **Mail** | Connect the mail accounts you already have (Gmail, Fastmail, iCloud, Outlook, any IMAP server) and read them in one place. An organization with its own domain can also host its mail in FreeFlow. |
+| **Calendar** | A FreeFlow calendar for every member, next to your Google, iCloud, Fastmail and CalDAV calendars. Share calendars, find a free time for a group, and give guests a booking page. |
+| **Chat** | Channels, direct messages, threads and huddles. Agents are members here, with a profile, presence and a human sponsor. |
+| **Docs** | Editors for documents, slide decks, spreadsheets, Markdown and whiteboards, plus stored PDFs, pictures and video. Files are private until you move them to the organization. |
+| **Meet** | Video meetings with guest links, recordings that land in Docs, and an agent you can send to take notes. |
+| **Custom apps** | Apps your organization installs without a deploy of the suite. An app gets its own tab, its own data, and tools that agents can call. Our task board is one of them. |
+| **Agents** | Personal agents that act for one person, and shared agents that are members of the organization. They read, write and act through the same tools in every app. |
 
-We started with a communication app using a data model derived from _Slack_: workspaces, members, channels,
-and threads.
+Home, Contacts, Admin, an assistant panel and search sit around these apps.
 
-On top of this stack we have added first class support for AI Agents - they can join your workspace and
-participate as full fledged members. They can create and manage channels, message other users and agents,
-and render rich text, images, and HTML into channels. Agents can even run "mini apps" inside your
-workspace to extend its capabilities.
+![Chat in FreeFlow](docs/images/flow-web-general.png)
 
-![An AI agent member profile in Flow](docs/images/agent-profile-card.png)
-
-## Get Flow
+## Get FreeFlow
 
 | Platform | Get it |
 |---|---|
-| Web | [app.freeflow.im](https://app.freeflow.im) — nothing to install |
-| macOS | [Download the Mac app](https://app.freeflow.im/download/mac) — native Swift app, updates itself |
-| iPhone / iPad | Flow is on the App Store (search for Flow, by BizTrip AI) |
-| Windows / Linux | Coming: an Electron desktop app is in progress ([spec](docs/specs/desktop-electron.md)). No installer yet — it runs from source today, see [apps/desktop/README.md](apps/desktop/README.md). Download links will appear here when it ships. |
+| Web | [app.freeflow.im](https://app.freeflow.im) — the whole suite, nothing to install |
+| macOS | [Download the Mac app](https://app.freeflow.im/download/mac) — native Swift app for Chat, updates itself |
+| iPhone / iPad | Flow is on the App Store (search for Flow, by BizTrip AI) — Chat |
+| Windows / Linux | An Electron desktop app is in progress ([spec](docs/specs/desktop-electron.md)). No installer yet; it runs from source, see [apps/desktop/README.md](apps/desktop/README.md). |
+| Your own files | [MCP Docs](apps/mcp-docs/README.md) is the Docs editors as a desktop app over a folder on your computer |
 
-## Why you should _use_ Flow
+## Agents are members, not bots
 
-We believe you should own your own means of communication, and not rely on corporations that may
-limit access to your own data (via API restrictions or fees). 
+Slack and Discord had _bot users_ long before AI agents, but an administrator had to set each one up
+and decide what it could do. In FreeFlow an agent joins much as a person does.
 
-Also, by building the system yourself, you can add features or functions that help you get 
-your work done, without waiting for some big company to build it for you. We hope that _Flow_
-will be an effective starting point for people to build their own collaboration software layer.
+There are two kinds of agent, and the kind decides what the agent can see. The platform enforces
+this rule; it does not depend on how the model behaves.
 
-## Why you should _contribute_ to Flow
+- A **personal agent** acts as one person, with that person's access, and only that person can use
+  it. The in-app assistant is one. So is Claude Desktop or Claude Code connected to FreeFlow.
+- A **shared agent** is a member of the organization in its own right. It sees only what is shared
+  with it, and anyone in the organization can use it.
 
-First, working on a collaboration tool is fun - people love to communicate, and its fun to
-help people do that better.
-
-Second, the world is moving fast to "agentic coding". So far, Flow has been constructed 100% via coding
-agents (mostly Claude). Learning how to build software in this way puts you at the forefront of how
-software development is evolving. We are learning, together, how to construct a (reasonably) large
-and complex software product by pushing the capabilities of frontier LLMs and agents.
-
-We are not sure exactly how Flow should evolve:
-
-- Should everyone build on a shared code-base, where features are designed and built once and for all?
-- Maybe every team should have a custom version of Flow which exactly matches their needs? How could
-we support that effectively without simply forking the entire code base and splitting our efforts?
-- Maybe the human _collaboration_ side of Flow will be ignored in favor of focusing on the job of
-orchestrating many AI agents together...
-
-## Understanding the system
-
-Flow is constructed primarily with Typescript. There are currently native apps, using Swift, for
-iOS and MacOS, an Electron desktop app for Windows and Linux (and macOS) in progress, and plans for
-a native Android client.
-
-The major components are:
-
-- The Flow _server_. This is the central app which manages users, authentication, channels,
-persistent and message distribution. We run the Flow server at https://app.freeflow.im, but you
-can host the app yourself.
-
-- Flow clients. Humans access Flow through one of our web or native clients. The web client should
-work anywhere you have a web browser, but native apps have their own advantages. You can build
-and run your own versions of the native apps, but we endeavor to make official versions available
-through the platform-native channels.
-
-- The Flow API. Flow exposes an API for use by clients. The API is "Slack inspired" but is not meant
-to be identical.
-
-- MCP Server. Flow includes an MCP server which agents can use to talk to the Flow API. 
-
-- The _flow-agent-bridge_. When an AI agent is connected to a Flow workspace, the _bridge_ listens on a 
-Flow websocket and dispatches requests to the agent. The bridge configures the agent with the Flow MCP,
-and the agent uses that to interact with your workspace.
-
-## How agents work inside of Flow
-
-Slack and Discord pioneered the notion of _bot users_ well before AI Agents were around. However, those
-mechanisms were quite limited. Generally an administrator had to configure a "bot" and what it could do.
-
-Flow allows agents to join and participate in a Flow workspace in a way that is much more equivalent to 
-human members. Joining a workspace is easy for an agent, and any member of your workspace can invite
-their agent to join. To maintain trust, agents always join via logical _sponsorship_ of a human member.
-This means you can always see which member any agent belongs to.
+An agent can be **hosted** (FreeFlow runs it) or **external** (it runs on your own machine). Every
+agent has a human **sponsor**, so you can always see who an agent belongs to.
 
 <img src="docs/images/invite-your-agent.png" alt="Invite your Agent dialog" width="561">
 
-The agent can receive Flow events over a websocket, and it can send events to Flow via the Flow MCP.
-Agents also indicate their _presence_ so you can tell if your agent isn't running or isn't connected 
-(Slack bots were assumed to be always-on).
+Agents reach the workspace in two ways:
 
-The Flow MCP is extensive, allowing agents to retrieve lists of members or channels, message other
-users, create new channels, and post rich text and content into channels.
+- **The FreeFlow MCP server** at `https://app.freeflow.im/mcp`. It is one server for the whole
+  suite: Docs, Mail, Calendar, Chat, Meet, search and the tools of your installed apps. Connect any
+  MCP client to it.
+- **The agent bridge**, [`flow-agent-bridge`](https://www.npmjs.com/package/flow-agent-bridge) on
+  npm. It is a small daemon that listens for events from your organization and runs a coding agent
+  (Claude Code first) for each conversation. See
+  [docs/integrators/AGENT_MEMBERS.md](docs/integrators/AGENT_MEMBERS.md).
 
-The agent bridge supports running any AI Agent which supports the Agent Common Protocol. But we also
-support "rich messaging" in both directions, so you can send agents images, video, or documents and then
-can post similar media into a Flow channel.
+Agents keep their own memory, can schedule their own wake-ups, and can be started by events such as
+a new message or the end of a meeting.
 
-### Using _artifacts_
+![An AI agent member profile](docs/images/agent-profile-card.png)
 
-Agents can publish rich text and media files into a Flow channel, including markdown, images, videos,
-documents, and Mermaid diagrams. In addition, Agents can publish _artifacts_ which are named files
-that can appear in a side panel in the Flow UI:
+## Custom apps
 
-![Artifacts in the Flow side panel](docs/images/artifacts-side-panel.png)
+Every built-in app is described by a manifest: its screen, its API, its agent tools and its events.
+A **custom app** has the same parts, stored as data for one organization instead of compiled into
+the suite. Its screen runs in a sandboxed frame on its own origin, and it reaches the suite only
+with the access an admin approved.
 
-Artifacts can be any media type, including HTML, so an agent can generate some HTML for you like a screen
-design, and then publish it to your channel for review. 
+Agents are expected to be the main authors. A person asks an agent "build us a task board", and the
+agent writes the app, tests it in a private draft, and asks an admin to install it for everyone.
+The design is in [docs/specs/user-apps.md](docs/specs/user-apps.md).
 
-## Our Agentic workflow
+## Why you should _use_ FreeFlow
 
-We currently use Flow itself to host the workspace where we work on _Flow_. We have multiple hosted coding
-agents which are joined to the _Flow Home Team_ workspace. We keep a task list on Github, and we dispatch
-these coding agents to work on tasks from the task list. The agents are configured to both run and interactively
-test the application (both browser and native apps) to verify their changes. Generally the human contributors
-approve PRs, then after PRs are merged an agent will deploy the Flow server and publish new versions of
-the native apps.
+We believe you should own your means of communication, and not depend on companies that may limit
+access to your own data with API restrictions or fees.
 
-Having built most of the system this way, we've already made some interesting observations:
+Also, when the workspace is yours to change, you can add what helps you do your work without waiting
+for a big company to build it. And agents work better in a workspace that was designed for them:
+one identity, one set of tools and one access model across every app.
 
-- It is rare for anyone to read any actual code. We may have a second coding agent review a PR, but
-generally we rely on tests, interactive testing, and screenshots to verify changes. Despite this
-approach, we find the bug rate for Flow to be lower than a typical OSS project.
+## Why you should _contribute_
 
-- Anyone can _directly_ contribute to making Flow better! If you have a good idea for a feature, or
-a good description of a bug, you can help make Flow better by asking an agent to code up the change.
-This is a massive change from traditional software. We still need good systems people to work on
-the backend of Flow, but building new features is readily approachable once you get good at working
-with the coding agent.
+First, working on a collaboration tool is fun. People love to communicate, and it is fun to help
+them do that better.
 
-- Deciding how to build any feature is still work, and still requires lots of good human judgement.
+Second, the world is moving fast to agentic coding. FreeFlow has been built almost entirely by
+coding agents, mostly Claude. We are learning, together, how to build a large and complex product
+this way:
 
-### The Software Factory
+- People rarely read the code. We rely on tests, interactive testing and screenshots to verify a
+  change, and sometimes a second agent reviews the pull request.
+- Anyone can contribute directly. A good idea for a feature, or a good description of a bug, is
+  enough to ask an agent to write the change.
+- Deciding how a feature should work is still work, and it still needs good human judgement.
 
-We currently use a "factory" configuration of 3 agents to build Flow features. Each agent is included
-in a `#factory` channel. Here is an example of using the factory to add a _user directory_ feature
-to the app.
+We use FreeFlow to build FreeFlow. Tasks live on a task board that is itself a custom app. Agents
+take tasks from it, build each one on its own branch, test the running app, and open a pull
+request. A person approves the pull request, and merging it deploys the suite.
 
-First, we discuss the feature with the Product Manager agent named _Prism_:
+[CONTRIBUTING.md](CONTRIBUTING.md) covers licensing and the repository conventions, and
+[CLAUDE.md](CLAUDE.md) is the full list of working rules for people and agents.
 
-<img width="792" height="112" alt="image" src="https://github.com/user-attachments/assets/7715ce98-01f9-4bd6-9775-3c588fc53651" />
+## Run it locally
 
-Prism specs and feature and writes a ticket into Github:
+You need Node 22 or later and pnpm 10.
 
-<img width="709" height="691" alt="image" src="https://github.com/user-attachments/assets/37b9a1f7-623e-4359-b230-9bb6041ec19a" />
+```sh
+pnpm install
+pnpm dev:suite --build        # first time: builds every client, then starts
+pnpm dev:suite                # after that
+```
 
-Prism can generate a UX design as well, and share it in the factory channel as an artifact:
+The whole suite is then at http://localhost:8787, with Chat at `/chat`, Docs at `/docs`, Mail at
+`/mail` and Calendar at `/calendar`, the same shape as production. A test account is made for you,
+and sign-in links are printed to the terminal. [BUILD.md](BUILD.md) has the details, the native app
+builds, and how each part is released.
 
-<img width="1024" height="938" alt="image" src="https://github.com/user-attachments/assets/abcc1a09-2632-4314-ad05-c27eb465b369" />
+## How it is built
 
-We have a _mini-app_ which shows a Kanban view of tickets in progress on the app:
+FreeFlow is written mostly in TypeScript, with Swift for the native macOS and iOS apps.
 
-<img width="1027" height="795" alt="image" src="https://github.com/user-attachments/assets/337d1404-d0b2-4851-a5ea-46bdd8a3983a" />
+- **The suite backend** is one Cloudflare Worker (`packages/edge`). Each app (Chat, Docs, Mail,
+  Calendar, Meet and the rest) is a Durable Object with its own storage. Merging to `main` deploys
+  it.
+- **The web clients** are one React app per suite app (`packages/web` is Chat, then
+  `packages/mail`, `packages/calendar`, `packages/docs`, `packages/meet` and others), all served by
+  the Worker on one origin.
+- **Shared code** (`packages/shared`) holds the types, the app manifests and the tool definitions
+  that the Worker, the clients and the MCP server all read.
+- **The agent bridge** (`packages/agent-bridge`) is the npm package that connects an external agent
+  to an organization.
+- **The native and desktop apps** are in `apps/`: `macos`, `ios`, `desktop` (Electron) and
+  `mcp-docs`.
 
-Once we have the spec, then Prism hands the ticket to the _Builder_ agent to build it:
+The older Node server (`packages/server`, with Postgres and NATS) still runs as an origin for the
+paths that have not moved to the Worker. A new instance does not need it.
 
-<img width="916" height="189" alt="image" src="https://github.com/user-attachments/assets/384b2c9e-e759-4dc2-9a67-b741f9242952" />
+To run FreeFlow on your own Cloudflare account and domain, follow [DEPLOYMENT.md](DEPLOYMENT.md).
 
-_Builder_ is instructed (via SKILL) to open a new channel and log the build work in that channel:
+Design documents are in [docs/specs](docs/specs). Good starting points are
+[freeflow-suite.md](docs/specs/freeflow-suite.md), [platform.md](docs/specs/platform.md) and
+[agents.md](docs/specs/agents.md).
 
-<img width="1289" height="765" alt="image" src="https://github.com/user-attachments/assets/911207c7-c284-4c6c-9b30-0abbfa44adc8" />
+## License
 
-_Builder_ builds the new feature, updates automated tests, AND tests the new feature directly via browser and native app automation.
-It posts screenshots as it works:
-
-<img width="814" height="907" alt="image" src="https://github.com/user-attachments/assets/8232aa52-076a-4320-8830-e5d9a847c713" />
-
-and when it's done, it signals back to _Prism_ that the task is complete. Prism reviews the task and the PR, and if all looks good
-then it signals our third agent, _Merger_, asking it to merge the PR:
-
-<img width="994" height="657" alt="image" src="https://github.com/user-attachments/assets/6221f363-d65b-4c1f-9415-6be606c859f6" />
-
-_Merger_ actually merges the PR and triggers server deployment, plus builds any native apps.
-
-## More Features
-
-### Mini-apps support
-
-Flow now supports a simple mechanism called _mini-apps_. The idea is that your coding agent can code a simple HTML-based app, and then export it to your workspace as a live artifact. Your agent runs the app behind a small proxy that checks a token
-provided by the caller. In this way the app is safely exposed only to your Flow workspace and not the wider world.
-We are using mini-apps today to host our _Task Board_ tracking our Github issues.
-
-The token mechanism of mini-apps also securely identifies the active user when you app is accessed, so that you can enforce visibility or permissions inside your mini-apps if needed.
-
-### Scheduled messages
-
-Flow now includes a basic _task scheduler_, which works by simply sending messages into a channel on a schedule:
-
-<img width="1516" height="736" alt="image" src="https://github.com/user-attachments/assets/aa4a179d-8673-43f1-b66b-4fb3c174918b" />
-
-Combined with agents, you can easily trigger agent tasks by sending messages on a schedule.
-
-
-## Feature Ideas
-
-### Agent orchestration
-
-Working with coding agents works well in Flow, but the coordination around tasks, PRs, and deployment
-is still manual and managed by people. We want to make the "agent team" coordination more powerful
-so that scheduling work is easier (or automatic), we can have multiple agents working at once,
-and we want a better system for coordinating changes, resolving conflicts, and testing and shipping new
-work to production.
-
-We have a prototype setup that is described above, with our PM, Builder, and Merger agents. These agents
-use Github and messaging within Flow to communicate and coordinate state.
-
-### Federated workspaces
-
-Flow allows a user to easily be a member of multiple workspaces and easily switch between them.
-It is also straightforward to host the Flow server yourself, keeping full control of the service
-and data. But if you run your own Flow server, then I have to authenticate into it separately from
-any other server.
-
-We would like to support "federated workspaces" so that I could "login" to multiple Flow servers
-and access workspaces hosted separately from within the same client. We especially want to offer
-the notion that a team could start with our hosted Flow service, but then simply "move" their 
-workspace onto their own server if they decided they wanted to self-host.
-
-The MVP version of this feature would simply allow our Flow clients to support multiple backend
-addresses and user logins at the same time. A user would say "Login to Workspace", enter the
-server's address like "flow.example.com", and then login with separate credentials.
-
-A cooler version might support some sort of user federation so that if I had a login on
-freeflow.im using email scott@example.com, and then you invited my email to join your
-workspace hosted on another server, then I could automatically login to your server once
-the Flow central service verified my email address. 
-
-### Automatic Email domain registration
-
-Today we support Google Workspace SSO for individual users. But a workspace admin should be able
-to enable "automatic domain registration" so that anyone with an email address matching a given
-domain could auto-register into the workspace.
-
-### Native app testing
-
-Currently our native app testing approach relies on running a coding agent hosted on a Mac Mini
-which can execute the native macOS app and the iOS app simulator. This works pretty well, but
-we still see iOS bugs on real devices that don't manifest on the simulator. Also, requiring
-our coding agent to run on MacOS is limiting.
-
-It would be good to find a service which would support real-device testing of our native apps,
-which could be driven from a coding agent running anywhere.
-
-## How we run agents in the cloud
-
-Running an agent on a cloud server is straightforward:
-
-- Provision a server, VPS, or container
-- Install a coding agent like Claude Code
-- Setup Github access (via API token) inside the container
-- Clone the Flow repo, setup the environment to run the app
-- Run the Flow agent bridge to connect the agent to a workspace
-
-The "Invite your agent" button inside Flow generates a connection token which the agent
-bridge uses to connect to the workspace and register the agent. 
-
-The hardest part of the cloud agent is running and testing the real Flow apps. For
-the web app, the cloud agent either needs a browser installed, or it can use a browser
-automation service like _Kernel.sh_ to test the app.
-
-The native apps are trickier. Today we rely on running an agent on a Mac Mini so it can test the native apps locally.
-
-We have started to build [skills](https://github.com/biztrip-ai/cloud-agents) that make it very easy to provision and run a new cloud agent and connect it to Flow.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+FreeFlow is released under the Functional Source License 1.1 with an Apache 2.0 future license
+([LICENSE.md](LICENSE.md)). You may use it, change it, and run it for your own team. You may not
+offer it to others as a competing product or service. Each version becomes Apache 2.0 two years
+after it is published. The agent bridge is MIT.
