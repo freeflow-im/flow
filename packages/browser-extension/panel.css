@@ -1,0 +1,57 @@
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  font: 13px/1.4 system-ui, sans-serif;
+  color: #1f1f1f;
+  background: #fff;
+}
+#suite {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+}
+#footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid #e3e6ea;
+  background: #f8f9fa;
+  color: #5f6368;
+}
+#footer[hidden] {
+  display: none;
+}
+#agent-tabs {
+  flex: 1;
+}
+#stop {
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  padding: 2px 10px;
+  background: #fff;
+  font: inherit;
+  color: #b3261e;
+  cursor: pointer;
+}
+#dev {
+  padding: 4px 10px 6px;
+  border-top: 1px solid #e3e6ea;
+  color: #5f6368;
+  font-size: 12px;
+}
+#dev-form {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+#dev-origin {
+  flex: 1;
+  font: inherit;
+}

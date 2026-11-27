@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FILES = ['background.js', 'icons'];
+const FILES = ['background.js', 'panel.html', 'panel.js', 'panel.css', 'icons'];
 
 const manifest = JSON.parse(readFileSync(join(here, 'manifest.json'), 'utf8'));
 delete manifest.key;

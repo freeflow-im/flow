@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- FreeFlow Browser's side panel: the suite's /home/browser page in a frame (panel.js), and a footer for the agent's tabs. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>FreeFlow</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <iframe id="suite" title="FreeFlow assistant" allow="clipboard-write"></iframe>
+    <footer id="footer" hidden>
+      <span id="agent-tabs"></span>
+      <button type="button" id="stop" title="Close every tab the assistant opened">Stop</button>
+    </footer>
+    <details id="dev" hidden>
+      <summary>Suite address (dev build)</summary>
+      <form id="dev-form"><input id="dev-origin" spellcheck="false" /><button type="submit">Use</button></form>
+    </details>
+    <script src="panel.js" type="module"></script>
+  </body>
+</html>

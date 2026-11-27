@@ -2,9 +2,13 @@
 // on a browser_* tool, the FreeFlow page that started the turn passes the call here (chrome.runtime.sendMessage, allowed
 // by `externally_connectable` for FreeFlow's origins only), and this worker runs it and answers with text.
 //
-// The agent works only in tabs it opened, kept in one collapsed "FreeFlow agent" group per window. It never touches the
-// person's own tabs, never types into password fields (it hands those pages to the person instead), and the toolbar
-// button closes every agent tab at once. Pages are read as text with numbered references for links, buttons and fields;
+// The toolbar button opens the side panel (panel.html, docs/specs/browser-extension.md): the person's assistant, FreeFlow's
+// own page in a frame. A message sent there carries the tab in front, which this worker reads for it (`page`), and the
+// agent may then read and screenshot that tab, nothing more.
+//
+// Otherwise the agent works only in tabs it opened, kept in one collapsed "FreeFlow agent" group per window. It never
+// clicks or types in the person's own tabs, never types into password fields (it hands those pages to the person
+// instead), and Stop (in the panel, or on the toolbar button's menu) closes every agent tab at once. Pages are read as text with numbered references for links, buttons and fields;
 // the numbers are kept on the elements (data-flow-ref) so a click or a typed value names what a read showed.
 //
 // Ideas from anomalyco/browse (MIT): agent tabs in a collapsed group, the take-back toolbar button, handing a tab to the
@@ -45,9 +49,34 @@ async function saveTabs(set) {
   await chrome.action.setBadgeBackgroundColor({ color: '#7c3aed' });
 }
 
-async function agentTab(tab) {
+// The person's tabs a side-panel message was about (`page`): the agent may read and screenshot them, from the panel only.
+async function sharedTabs() {
+  const { shared = [] } = await chrome.storage.session.get('shared');
+  return new Set(shared);
+}
+
+async function shareTab(id) {
+  const set = await sharedTabs();
+  set.add(id);
+  await chrome.storage.session.set({ shared: [...set] });
+}
+
+/**
+ * One of the agent's tabs, else an error the agent is told. `reading` (browser_read, browser_screenshot) from the side
+ * panel's frame also allows a tab of the person's that a panel message was about.
+ */
+async function agentTab(tab, { reading = false, sender } = {}) {
   const id = Number(tab);
-  if (!Number.isInteger(id) || !(await agentTabs()).has(id)) throw new ToolError(`Tab ${tab} is not one of your tabs. browser_tabs lists them; browser_open opens one.`);
+  const mine = Number.isInteger(id) && (await agentTabs()).has(id);
+  const shared = !mine && reading && sender && fromPanel(sender) && Number.isInteger(id) && (await sharedTabs()).has(id);
+  if (!mine && !shared) {
+    throw new ToolError(
+      Number.isInteger(id) && (await sharedTabs()).has(id)
+        ? `Tab ${tab} is the user's own tab: you may only read it (browser_read) and look at it (browser_screenshot). To act on that page, open it in a tab of your own with browser_open.`
+        : `Tab ${tab} is not one of your tabs. browser_tabs lists them; browser_open opens one.`,
+    );
+  }
+  if (shared) return chrome.tabs.get(id).catch(() => { throw new ToolError(`Tab ${tab} was closed.`); });
   try {
     return await chrome.tabs.get(id);
   } catch {
@@ -61,13 +90,30 @@ async function agentTab(tab) {
 chrome.tabs.onRemoved.addListener(async (id) => {
   const set = await agentTabs();
   if (set.delete(id)) await saveTabs(set);
+  const shared = await sharedTabs();
+  if (shared.delete(id)) await chrome.storage.session.set({ shared: [...shared] });
 });
 
-// The toolbar button: stop the agent by closing every tab it opened.
-chrome.action.onClicked.addListener(async () => {
+/** Stop: close every tab the agent opened. */
+async function stopAgent() {
   const set = await agentTabs();
   await saveTabs(new Set());
   if (set.size) await chrome.tabs.remove([...set]).catch(() => {});
+}
+
+// The toolbar button opens the side panel; its right-click menu has Stop, for when the panel is closed.
+const STOP_MENU = 'stop-agent';
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({ id: STOP_MENU, title: 'Stop the assistant and close its tabs', contexts: ['action'] }, () => void chrome.runtime.lastError);
+});
+chrome.contextMenus.onClicked.addListener((info) => info.menuItemId === STOP_MENU && void stopAgent());
+
+// The panel page's own requests (it is this extension's page): Stop.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || msg?.type !== 'stop') return false;
+  stopAgent().then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+  return true;
 });
 
 async function addToGroup(tabId, windowId) {
@@ -386,7 +432,7 @@ async function run(name, input, sender) {
       return open.length ? open.map((t) => `Tab ${t.id}: ${t.title} — ${t.url}`).join('\n') : 'You have no tabs open. browser_open opens one.';
     }
     case 'browser_read': {
-      const tab = await agentTab(input.tab);
+      const tab = await agentTab(input.tab, { reading: true, sender });
       return readTab(tab.id, input.offset);
     }
     case 'browser_click': {
@@ -427,12 +473,38 @@ async function run(name, input, sender) {
       return `Tab ${tab.id} is now in front of the user with your note. Tell the user what to do there and end your turn; when they say they are done, continue with browser_read.`;
     }
     case 'browser_screenshot': {
-      const tab = await agentTab(input.tab);
+      const tab = await agentTab(input.tab, { reading: true, sender });
       return screenshot(tab);
     }
     default:
       throw new ToolError(`Unknown tool ${name}.`);
   }
+}
+
+// --- The side panel ---
+
+/**
+ * A request from the side panel's frame: FreeFlow's page in this extension's panel has no tab (a FreeFlow page in a normal
+ * tab always has one), and the spike measured it so (docs/specs/browser-extension.md §2).
+ */
+const fromPanel = (sender) => !sender.tab && allowedOrigin(sender.origin);
+
+function selectedText() {
+  return String(globalThis.getSelection?.()?.toString() ?? '').slice(0, 4000);
+}
+
+/** The tab in front of the panel's window, read for one message: its address, title, selection and text. */
+async function panelPage(msg, sender) {
+  if (!fromPanel(sender)) throw new ToolError('Only the FreeFlow side panel may read the page in front.');
+  const windowId = Number(msg.window);
+  const { [`panel:${windowId}`]: key } = await chrome.storage.session.get(`panel:${windowId}`);
+  if (!key || msg.key !== key) throw new ToolError('The side panel is not open in that window.');
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  if (!tab?.id || !/^https?:/.test(tab.url ?? '')) throw new ToolError('The page in front cannot be read.');
+  const page = await inPage(tab.id, readPage, [0, MAX_READ]);
+  const [sel] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selectedText }).catch(() => [null]);
+  await shareTab(tab.id);
+  return { tab: tab.id, url: page.url, title: page.title, text: page.text, truncated: /\n\n\[\d+ more characters: browser_read with offset \d+\]$/.test(page.text), selection: sel?.result || undefined };
 }
 
 chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
@@ -443,6 +515,13 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'ping') {
     sendResponse({ ok: true, version: VERSION, tools: TOOLS });
     return false;
+  }
+  if (msg?.type === 'page') {
+    panelPage(msg, sender).then(
+      (page) => sendResponse({ ok: true, ...page }),
+      (e) => sendResponse({ ok: false, error: e instanceof ToolError ? e.message : `The page could not be read: ${e?.message ?? e}` }),
+    );
+    return true;
   }
   if (msg?.type === 'call' && TOOLS.includes(msg.name)) {
     run(msg.name, msg.input ?? {}, sender).then(
