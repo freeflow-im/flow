@@ -13,6 +13,10 @@ This file keeps two things:
 ## Parity
 
 - **The FreeFlow Browser side panel is Chrome only (2026-11-26, Taskboard task 54).** It is a Chrome extension: the panel is the suite's `/home/browser` page framed by the extension, so the desktop shell, macOS and iOS have no way to show it (deliberate; the same chat is in every client's assistant).
+- **Dragging a file onto a folder of the Docs folder tree is on web and desktop only (2026-11-26, Taskboard task 53).** The tree is the suite's Docs panel, which macOS and iOS open in the browser (deliberate, as for the rest of Docs).
+- **Pinning a participant in a meeting is on web and desktop only (2026-11-26, Taskboard task 49).** The pin button is on the Meet room's tiles, which macOS and iOS open in the browser (closes with Meet phase 6, native call screens).
+- **The floating New message button over Mail's list is on web and desktop only (2026-11-26, Taskboard task 51).** Mail is web only; macOS and iOS have no Mail (deliberate).
+- **Choosing the camera, microphone and speaker for a meeting is on web and desktop only (2026-11-25, Taskboard task 48).** The pickers are on the Meet check screen and in the room, which macOS and iOS open in the browser; Safari (including iOS) has no speaker choice, so the Speaker picker is hidden there (closes with Meet phase 6, native call screens).
 - **The off-today chip and arrowed Today button are web and desktop only (2026-11-25, Taskboard task 43).** macOS and iOS have no Calendar day or week views yet (gap to close with Calendar there).
 - **Send as email from Docs is on web and desktop only (2026-11-24, Taskboard task 37).** File › Send as email opens Mail's composer beside the file; Mail is web only, so macOS and iOS do not offer it (deliberate).
 - **The reconnect-calendar label is web and desktop only (2026-11-24, Taskboard task 38).** It is drawn by the suite bar, so macOS and iOS do not show it; their calendars sync through the same server, which stops at `auth_failed` (gap to close: a native banner).

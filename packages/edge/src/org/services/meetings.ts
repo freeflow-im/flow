@@ -36,6 +36,14 @@ const MEMBER_PRESET = 'group_call_participant';
 const GUEST_PRESET = 'flow_guest';
 /** A guest's RTK custom participant id starts with this; a member's is their user id. */
 export const GUEST_ID_PREFIX = 'guest-';
+/** A browser's guest key (packages/meet/src/lib/rejoin.ts guestKey). */
+const GUEST_KEY = /^[A-Za-z0-9-]{16,64}$/;
+
+/** A guest's id in one meeting, from their browser's key: the same every time, and not the key itself. */
+export async function guestIdOf(meetingId: string, key: string): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${meetingId}:${key}`));
+  return [...new Uint8Array(hash).slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 const MAX_GUEST_NAME = 60;
 /** Live now only asks RTK about rooms joined this recently. */
 const LIVE_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -396,10 +404,13 @@ export async function previewMeeting(code: string): Promise<MeetingPreviewDTO> {
 }
 
 /**
- * A guest's way in (ruling R2: straight in, no waiting room). Each join is a new RTK guest: a guest has no account to
- * tie a participant to. Refused for a huddle (a conversation's call is for its members) and while a host has locked it.
+ * A guest's way in (ruling R2: straight in, no waiting room). A guest has no account to tie a participant to, so each
+ * join is a new RTK participant. Its id is random, unless the browser sent its guest key: then the id is made from the
+ * key and the meeting, so the same browser coming back has the same id (the Meet page then knows its old connection
+ * from its new one, packages/meet/src/lib/rejoin.ts) and nobody can make that id without the key.
+ * Refused for a huddle (a conversation's call is for its members) and while a host has locked it.
  */
-export async function joinAsGuest(code: string, name: string): Promise<{ join: MeetingGuestJoinDTO; visitorToken: string | null }> {
+export async function joinAsGuest(code: string, name: string, key?: string): Promise<{ join: MeetingGuestJoinDTO; visitorToken: string | null }> {
   requireMeet();
   const shown = name.replace(/\s+/g, ' ').trim().slice(0, MAX_GUEST_NAME);
   if (!shown) throw badRequest('validation', 'name: enter your name');
@@ -407,7 +418,7 @@ export async function joinAsGuest(code: string, name: string): Promise<{ join: M
   if (m.channelId) throw new ApiError(403, 'guests_not_allowed', 'This call is only for the people in its conversation.');
   if (m.locked) throw new ApiError(403, 'meeting_locked', 'This meeting is locked. Ask the host to unlock it.');
   await ensureTranscribing(m);
-  const guestId = `${GUEST_ID_PREFIX}${crypto.randomUUID()}`;
+  const guestId = `${GUEST_ID_PREFIX}${key && GUEST_KEY.test(key) ? await guestIdOf(m.id, key) : crypto.randomUUID()}`;
   const added = await rtk<{ id: string; token: string }>('POST', `/meetings/${m.rtkMeetingId}/participants`, {
     name: shown,
     preset_name: GUEST_PRESET,

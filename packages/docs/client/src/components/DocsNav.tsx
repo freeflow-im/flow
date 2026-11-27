@@ -2,8 +2,9 @@
 // the organization selected in the suite bar (Organization files, then My files). Choosing a folder shows its files on
 // the home page beside it; a file opened from there takes that place, and the panel stays, with the file's folder
 // still selected. The tree reads each folder's subfolders when it is opened (api.library), and again when the home
-// page says the folders changed (FOLDERS_CHANGED).
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+// page says the folders changed (FOLDERS_CHANGED). A file dragged from the home page's list onto a folder of the tree, of
+// the same root, moves there (libraryDrag.ts); a closed folder the drag rests on opens.
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { isInHome, useHomeMenu, type SuiteMenuItem } from '@flow/suite-bar';
 import { BASE } from '../basePath.ts';
@@ -12,6 +13,7 @@ import { cleanFolderPath } from '../../../shared/folders.ts';
 import { FAVORITES_PARAM, last as lastListing, RECENTS_PARAM, SHARED_WITH_ME_PARAM } from '../listing.ts';
 import { useOrganization } from '../organization.ts';
 import { FOLDER_PANEL } from '../panelSize.ts';
+import { draggedFile, FILE_MOVED, setDraggedFile, takesDrop } from '../libraryDrag.ts';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle.tsx';
 import { ORG_PARAM } from './RootSwitch.tsx';
 
@@ -162,6 +164,55 @@ export function DocsNav() {
     return () => window.removeEventListener(FOLDERS_CHANGED, again);
   }, [load]);
 
+  // The folder a dragged file is over that would take it, and the closed one it rests on, which opens after a moment.
+  const [dropKey, setDropKey] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const opening = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const stopOpening = () => {
+    if (opening.current) clearTimeout(opening.current.timer);
+    opening.current = null;
+  };
+  useEffect(() => {
+    // The drag ended anywhere (dropped elsewhere, or cancelled): nothing is over the tree.
+    const end = () => (setDropKey(null), stopOpening());
+    window.addEventListener('dragend', end, true);
+    window.addEventListener('drop', end, true);
+    return () => (window.removeEventListener('dragend', end, true), window.removeEventListener('drop', end, true), stopOpening());
+  }, []);
+  const dropTarget = (root: Root, path: string, name: string, canOpen: boolean) => {
+    const key = keyOf(root, path);
+    return {
+      onDragOver: (e: DragEvent<HTMLElement>) => {
+        if (!takesDrop(draggedFile(), root, path)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dropKey !== key) setDropKey(key);
+        if (canOpen && !expanded.has(key) && opening.current?.key !== key) {
+          stopOpening();
+          opening.current = { key, timer: setTimeout(() => (opening.current = null, setExpanded((x) => (x.has(key) ? x : new Set(x).add(key)))), 700) };
+        }
+      },
+      onDragLeave: (e: DragEvent<HTMLElement>) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setDropKey((k) => (k === key ? null : k));
+        if (opening.current?.key === key) stopOpening();
+      },
+      onDrop: (e: DragEvent<HTMLElement>) => {
+        const file = draggedFile();
+        if (!takesDrop(file, root, path)) return;
+        e.preventDefault();
+        setDraggedFile(null);
+        setDropKey(null);
+        stopOpening();
+        setMoveError(null);
+        api.moveToFolder(file.kind as Parameters<typeof api.moveToFolder>[0], file.id, placeOf(root, path)).then(
+          () => window.dispatchEvent(new Event(FILE_MOVED)),
+          (err: unknown) => setMoveError(`Couldn’t move “${file.title}” to ${name}: ${err instanceof Error ? err.message : 'something went wrong.'}`),
+        );
+      },
+    };
+  };
+
   const toggle = (key: string) => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key);
@@ -186,7 +237,7 @@ export function DocsNav() {
     const active = !!selected && 'root' in selected && selected.root === root && selected.path === path;
     return (
       <li key={key} role="treeitem" aria-expanded={leaf ? undefined : open} aria-selected={active}>
-        <div className={`dn-row${active ? ' active' : ''}`} style={{ paddingLeft: 6 + depth * 14 }}>
+        <div className={`dn-row${active ? ' active' : ''}${dropKey === key ? ' drop-target' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} {...dropTarget(root, path, name, !leaf)}>
           {leaf ? (
             <span className="dn-caret" />
           ) : (
@@ -274,6 +325,14 @@ export function DocsNav() {
         {listRow('favorites', 'Favorites', <StarGlyph />)}
         {orgId && listRow('withme', 'Shared with me', <SharedGlyph />)}
         <div className="dn-section">Folders</div>
+        {moveError && (
+          <div className="dn-note dn-error" role="alert">
+            {moveError}
+            <button aria-label="Dismiss" onClick={() => setMoveError(null)}>
+              ×
+            </button>
+          </div>
+        )}
         <ul className="dn-tree" role="tree" aria-label="Folders">
           {orgId && renderFolder('org', '', 'Organization files', 0, <PeopleGlyph />)}
           {renderFolder('me', '', 'My files', 0, <LockGlyph />)}

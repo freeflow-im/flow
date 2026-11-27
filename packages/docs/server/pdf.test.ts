@@ -9,7 +9,7 @@ import { buildApp } from './app.ts';
 import type { AgentContext } from '../shared/agent/protocol.ts';
 import { runServerTool } from './agent/tools.ts';
 import type { FileStore } from './files.ts';
-import { paperFor, PdfMaker, pdfName, PlaywrightRenderer, PrintError, PrintTickets, type PdfOptions, type PdfRenderer } from './pdf.ts';
+import { paperFor, PdfMaker, pdfName, PlaywrightRenderer, PRINT_READY, PrintError, PrintTickets, untilDrawn, type PdfOptions, type PdfRenderer } from './pdf.ts';
 import type { SheetStore } from './sheets.ts';
 import { mailbox, signUp } from './testing.ts';
 
@@ -240,6 +240,26 @@ describe('export_pdf (the desktop app’s MCP server)', () => {
     } finally {
       await client.close();
     }
+  });
+});
+
+describe('untilDrawn', () => {
+  // The Worker's build is minified: a function handed to the page would arrive calling a helper the page lacks.
+  it('asks the page with a string until it says it is drawn', async () => {
+    const asked: unknown[] = [];
+    let n = 0;
+    const page = { evaluate: async (what: unknown) => (asked.push(what), ++n === 2 ? Promise.reject(new Error('navigating')) : n >= 3) };
+    await untilDrawn(page, 5_000, 1);
+    expect(asked).toEqual([PRINT_READY, PRINT_READY, PRINT_READY]);
+    expect(typeof PRINT_READY).toBe('string');
+  });
+
+  it('gives up when the page never says so', async () => {
+    await expect(untilDrawn({ evaluate: async () => false }, 20, 1)).rejects.toThrow(new PrintError('The PDF could not be made: the page took too long to be drawn.'));
+  });
+
+  it('gives the last failure as the reason when the page keeps failing', async () => {
+    await expect(untilDrawn({ evaluate: async () => Promise.reject(new Error('Target page has been closed\nmore')) }, 20, 1)).rejects.toThrow(new PrintError('The PDF could not be made: Target page has been closed'));
   });
 });
 

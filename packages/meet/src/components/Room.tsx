@@ -2,23 +2,37 @@
 // joins as a guest with a name (phase 3, ruling R2). Both go through the check screen first, except a huddle opened from
 // Chat, which joins straight in. Then everyone is in a grid (a shared screen large, with people in a strip), with the
 // controls (mic, camera, share, people, chat, leave) and a side panel with People and Chat tabs (the Chat tab is Chat's
-// own page in a frame: lib/chat.ts). Built on the RealtimeKit core SDK with our own
+// own page in a frame: lib/chat.ts). Any tile or shared screen can be pinned to fill the stage, with the other views in a
+// strip of small squares (lib/stage.ts). Built on the RealtimeKit core SDK with our own
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RecordingState, type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
 import { playJoinChime } from '../lib/chime';
-import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Square, Users, Video, VideoOff, X } from 'lucide-react';
+import { Check, ChevronLeft, Circle, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Pin, PinOff, Settings, Square, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { agentIdOf, api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { SendAgent } from './SendAgent';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
 import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
+import { ALIVE, guestKey, lastPeer, notePeer, readRejoin, REPLACES, withoutReplaced } from '../lib/rejoin';
 import { ChatFrame } from './ChatFrame';
 import { AutoClose } from './AutoClose';
 import { useMediaQuery, useResizableWidth } from '../hooks/layout';
+import { pickDevice, rememberDevice, rememberedDevices, routeToSpeaker, useDeviceLists, type DeviceChoice, type DeviceKind } from '../lib/devices';
+import { DevicePickers, TestSpeaker } from './DevicePickers';
+import { keepPin, sameView, stageLayout, type Pin as PinChoice, type View } from '../lib/stage';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
+
+/** The speaker the room's sound plays on (lib/devices.ts); undefined is the browser's default. */
+const SpeakerContext = createContext<string | undefined>(undefined);
+
+/** Switches this person's camera or microphone in RealtimeKit to a device by id; a device that is gone is skipped. */
+async function switchInput(self: RTKSelf, kind: 'videoinput' | 'audioinput', id: string): Promise<void> {
+  const device = await self.getDeviceById(id, kind === 'videoinput' ? 'video' : 'audio').catch(() => null);
+  if (device) await self.setDevice(device);
+}
 
 /** Who is joining which room: a member (`meeting` set) or a guest (only the link's preview). */
 interface Entry {
@@ -45,7 +59,7 @@ type Phase =
   | { kind: 'loading' }
   | { kind: 'check'; entry: Entry }
   | { kind: 'joining'; media?: boolean }
-  | { kind: 'in'; client: Client; info: RoomInfo }
+  | { kind: 'in'; client: Client; info: RoomInfo; replaces: string | null }
   | { kind: 'left' }
   | { kind: 'error'; message: string; signIn?: boolean };
 
@@ -76,6 +90,47 @@ function useRoomUpdates(client: Client): void {
       client.participants.off('activeSpeaker', onAny);
     };
   }, [client]);
+}
+
+/**
+ * The connections that a newer connection of the same person replaced (lib/rejoin.ts): old connection → the new one.
+ * `replaces` is this page's own old connection, when this browser was in the room a moment ago: the page tells the room,
+ * and tells each person who comes in while RealtimeKit still has the old one.
+ */
+function useReplaced(client: Client, replaces: string | null): ReadonlyMap<string, string> {
+  const [replaced, setReplaced] = useState<ReadonlyMap<string, string>>(() => new Map(replaces ? [[replaces, client.self.id]] : []));
+  useEffect(() => {
+    const people = client.participants;
+    const onMessage = (m: { type: string; payload: unknown }) => {
+      const said = readRejoin(m.type, m.payload);
+      if (!said) return;
+      if (said.kind === 'replaces') {
+        // This page is the one named, and it is still open (the room in two tabs): say so, and stay drawn.
+        if (said.peerId === client.self.id) return void people.broadcastMessage(ALIVE, { peerId: said.peerId }).catch(() => {});
+        setReplaced((cur) => new Map(cur).set(said.peerId, said.by));
+      } else {
+        setReplaced((cur) => {
+          if (!cur.has(said.peerId)) return cur;
+          const next = new Map(cur);
+          next.delete(said.peerId);
+          return next;
+        });
+      }
+    };
+    const tell = () => {
+      if (replaces && people.joined.toArray().some((p) => p.id === replaces)) {
+        void people.broadcastMessage(REPLACES, { peerId: replaces, by: client.self.id }).catch(() => {});
+      }
+    };
+    people.on('broadcastedMessage', onMessage);
+    people.joined.on('participantJoined', tell);
+    tell();
+    return () => {
+      people.off('broadcastedMessage', onMessage);
+      people.joined.off('participantJoined', tell);
+    };
+  }, [client, replaces]);
+  return replaced;
 }
 
 /**
@@ -120,9 +175,43 @@ export function Avatar({ person, className }: { person: Pick<Person, 'name' | 'i
   );
 }
 
-function Tile({ person, self, speaking, small }: { person: Person; self: boolean; speaking: boolean; small?: boolean }) {
+/** Where a view is drawn: a cell of the even grid, the stage's one large view, or a small square in the strip. */
+type ViewSize = 'grid' | 'main' | 'strip';
+
+const VIEW_SIZE: Record<ViewSize, string> = {
+  grid: 'min-h-0 min-w-0',
+  main: 'min-h-0 min-w-0 flex-1',
+  strip: 'size-24 flex-none sm:size-32',
+};
+
+/**
+ * Pins a view to the stage, or unpins it. It shows on hover or focus (always on a touch screen, and while pinned), so the
+ * tiles stay clean.
+ */
+export function PinButton({ name, pinned, onClick }: { name: string; pinned: boolean; onClick: () => void }) {
+  const label = pinned ? `Unpin ${name}` : `Pin ${name}`;
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pinned}
+      onClick={onClick}
+      className={`absolute right-2 top-2 z-10 flex size-8 cursor-pointer items-center justify-center rounded-full border-0 text-white focus-visible:opacity-100 pointer-coarse:opacity-100 ${pinned ? 'bg-[#8ab4f8] text-[#202124] opacity-100' : 'bg-black/55 opacity-0 hover:bg-black/75 group-hover:opacity-100'}`}
+    >
+      {pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+    </button>
+  );
+}
+
+function Tile({ person, self, speaking, size = 'grid', pinned, onPin }: { person: Person; self: boolean; speaking: boolean; size?: ViewSize; pinned?: boolean; onPin?: () => void }) {
+  const small = size === 'strip';
   const video = useRef<HTMLVideoElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
+  const speakerId = useContext(SpeakerContext);
+  useEffect(() => {
+    if (audio.current) routeToSpeaker(audio.current, speakerId);
+  }, [speakerId]);
   useEffect(() => {
     const el = video.current;
     if (!el || !person.videoEnabled) return;
@@ -138,32 +227,36 @@ function Tile({ person, self, speaking, small }: { person: Person; self: boolean
   const label = self ? 'You' : person.name;
   return (
     <div
-      className={`relative flex items-center justify-center overflow-hidden rounded-xl bg-[#3c4043] ${small ? 'aspect-video w-48 flex-none' : 'min-h-0 min-w-0'} ${speaking ? 'shadow-[inset_0_0_0_3px_#8ab4f8]' : ''}`}
+      data-testid={`tile-${person.id}`}
+      className={`group relative flex items-center justify-center overflow-hidden rounded-xl bg-[#3c4043] ${VIEW_SIZE[size]} ${speaking ? 'shadow-[inset_0_0_0_3px_#8ab4f8]' : ''}`}
     >
+      {onPin && <PinButton name={label} pinned={!!pinned} onClick={onPin} />}
       {person.videoEnabled ? (
         <video ref={video} autoPlay playsInline muted className={`size-full object-cover ${self ? '-scale-x-100' : ''}`} />
       ) : (
         <Avatar person={person} className={small ? 'size-12 text-base' : 'size-20 text-3xl'} />
       )}
       {!self && <audio ref={audio} autoPlay />}
-      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">
-        {!person.audioEnabled && <MicOff size={13} className="text-[#f28b82]" aria-label="Muted" />}
-        {label}
+      <span className="absolute bottom-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">
+        {!person.audioEnabled && <MicOff size={13} className="flex-none text-[#f28b82]" aria-label="Muted" />}
+        <span className="truncate">{label}</span>
       </span>
     </div>
   );
 }
 
-function ScreenShare({ person }: { person: Person }) {
+function ScreenShare({ person, size = 'main', pinned, onPin }: { person: Person; size?: ViewSize; pinned?: boolean; onPin?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const track = person.screenShareTracks?.video;
   useEffect(() => {
     if (ref.current) ref.current.srcObject = track ? new MediaStream([track]) : null;
   }, [track]);
+  const label = `${person.name}’s screen`;
   return (
-    <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-black">
+    <div className={`group relative flex items-center justify-center overflow-hidden rounded-xl bg-black ${VIEW_SIZE[size]}`}>
+      {onPin && <PinButton name={label} pinned={!!pinned} onClick={onPin} />}
       <video ref={ref} autoPlay playsInline muted className="size-full object-contain" />
-      <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">{person.name}’s screen</span>
+      <span className={`absolute left-2 max-w-[calc(100%-16px)] truncate rounded-md bg-black/55 px-2 py-0.5 text-xs text-white ${size === 'strip' ? 'bottom-2' : 'top-2'}`}>{label}</span>
     </div>
   );
 }
@@ -199,8 +292,9 @@ function PanelTab({ label, selected, dot, onClick }: { label: string; selected: 
   );
 }
 
-function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLeft: () => void }) {
+function InRoom({ client, info, replaces, onLeft }: { client: Client; info: RoomInfo; replaces: string | null; onLeft: () => void }) {
   useRoomUpdates(client);
+  const replaced = useReplaced(client, replaces);
   const [panel, setPanel] = useState<Panel | null>(null);
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
   // Messages posted while the Chat tab is closed: the dot on the Chat button.
@@ -254,12 +348,42 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
       .finally(() => setRecordingBusy(false));
   };
   const self = client.self;
-  const others = client.participants.joined.toArray() as RTKParticipant[];
+  // A connection its own person replaced is not drawn or heard while RealtimeKit still has it (lib/rejoin.ts).
+  const others = withoutReplaced(self, client.participants.joined.toArray() as RTKParticipant[], replaced);
   const everyone: Person[] = [self, ...others];
   const speaker = client.participants.lastActiveSpeaker;
   const presenter = everyone.find((p) => p.screenShareEnabled);
   const cols = everyone.length <= 1 ? 1 : everyone.length <= 4 ? 2 : everyone.length <= 9 ? 3 : 4;
   const rows = Math.ceil(everyone.length / cols);
+  // The view this person pinned to the stage (lib/stage.ts): it follows someone who rejoins and is dropped when they leave.
+  const [chosenPin, setPin] = useState<PinChoice>(null);
+  const ids = everyone.map((p) => p.id);
+  const presenterId = presenter?.id ?? null;
+  const pin = keepPin(chosenPin, ids, presenterId, replaced);
+  useEffect(() => {
+    if (pin !== chosenPin) setPin(pin);
+  }, [pin, chosenPin]);
+  const layout = stageLayout(ids, presenterId, pin);
+  const togglePin = (v: View) => setPin((cur) => (sameView(cur, v) ? null : v));
+  const byId = new Map(everyone.map((p) => [p.id, p]));
+  // Pinning only means something with someone else in the room, or a screen shared.
+  const pinnable = everyone.length > 1 || !!presenter;
+  const drawView = (v: View, size: ViewSize) => {
+    const p = byId.get(v.id)!;
+    const pinned = sameView(pin, v);
+    if (v.kind === 'screen') return <ScreenShare key={`screen:${v.id}`} person={p} size={size} pinned={pinned} onPin={() => togglePin(v)} />;
+    return (
+      <Tile
+        key={`person:${v.id}`}
+        person={p}
+        self={p === self}
+        speaking={p.id === speaker && p.audioEnabled}
+        size={size}
+        pinned={pinned}
+        onPin={pinnable ? () => togglePin(v) : undefined}
+      />
+    );
+  };
 
   useEffect(() => {
     const onLeave = () => onLeft();
@@ -272,6 +396,38 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
     fn().catch((e: unknown) => setMediaError(`Could not ${what}: ${e instanceof Error ? e.message : String(e)}`));
   };
 
+  // Camera, microphone and speaker (lib/devices.ts): the lists follow devices being plugged in and out.
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const lists = useDeviceLists();
+  const [chosenSpeaker, setChosenSpeaker] = useState(() => rememberedDevices().audiooutput);
+  const current = self.getCurrentDevices();
+  const inUse: DeviceChoice = {
+    videoinput: current.video?.deviceId ?? pickDevice(lists.videoinput, undefined),
+    audioinput: current.audio?.deviceId ?? pickDevice(lists.audioinput, undefined),
+    audiooutput: pickDevice(lists.audiooutput, chosenSpeaker),
+  };
+  const chooseDevice = (kind: DeviceKind, id: string) => {
+    rememberDevice(kind, id);
+    if (kind === 'audiooutput') return setChosenSpeaker(id);
+    act(kind === 'videoinput' ? 'switch the camera' : 'switch the microphone', () => switchInput(self, kind, id));
+  };
+  // A device plugged in or out: when the camera or microphone in use is gone, move to the remembered one or the
+  // default; when the remembered one comes back, go back to it.
+  useEffect(() => {
+    const now = self.getCurrentDevices();
+    const remembered = rememberedDevices();
+    for (const [kind, cur] of [
+      ['audioinput', now.audio?.deviceId],
+      ['videoinput', now.video?.deviceId],
+    ] as const) {
+      const list = lists[kind];
+      if (list.length === 0) continue;
+      const want = pickDevice(list, remembered[kind]);
+      const gone = !!cur && !list.some((d) => d.id === cur);
+      if (want && cur !== want && (gone || want === remembered[kind])) void switchInput(self, kind, want).catch(() => {});
+    }
+  }, [self, lists]);
+
   const started = useMemo(() => Date.now(), []);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -281,7 +437,8 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
   const minutes = Math.floor((now - started) / 60_000);
 
   return (
-    <div className="flex h-full flex-col bg-[#202124] text-[#e8eaed]">
+    <SpeakerContext.Provider value={inUse.audiooutput}>
+    <div className="relative flex h-full flex-col bg-[#202124] text-[#e8eaed]">
       <header className="flex h-14 flex-none flex-wrap items-center gap-3 px-5">
         {!info.guest && (
           <>
@@ -338,21 +495,20 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
 
       <div className="flex min-h-0 flex-1 gap-3 px-3 pb-3">
         <section className="flex min-w-0 flex-1 flex-col gap-2.5" aria-label="People in the meeting">
-          {presenter ? (
+          {layout.kind === 'focus' ? (
+            // One view (the pinned one, else a shared screen) fills the stage; the others are small squares under it.
             <>
-              <ScreenShare person={presenter} />
-              <div className="flex flex-none gap-2.5 overflow-x-auto">
-                {everyone.map((p) => (
-                  <Tile key={p.id} person={p} self={p === self} speaking={p.id === speaker && p.audioEnabled} small />
-                ))}
-              </div>
+              {drawView(layout.main, 'main')}
+              {layout.strip.length > 0 && (
+                <div className="flex flex-none gap-2.5 overflow-x-auto [&>:first-child]:ml-auto [&>:last-child]:mr-auto" data-testid="stage-strip">
+                  {layout.strip.map((v) => drawView(v, 'strip'))}
+                </div>
+              )}
             </>
           ) : (
             // Every cell fits the window: equal rows and columns share the stage, and each video fills its cell.
             <div className="grid min-h-0 flex-1 gap-2.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
-              {everyone.map((p) => (
-                <Tile key={p.id} person={p} self={p === self} speaking={p.id === speaker && p.audioEnabled} />
-              ))}
+              {layout.people.map((id) => drawView({ kind: 'person', id }, 'grid'))}
             </div>
           )}
         </section>
@@ -422,6 +578,24 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         )}
       </div>
 
+      {devicesOpen && (
+        <div
+          role="dialog"
+          aria-label="Audio and video settings"
+          className="absolute bottom-22 left-1/2 z-20 flex w-[min(640px,calc(100%-24px))] -translate-x-1/2 flex-col gap-3 rounded-xl bg-[#2d2e30] p-4 shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold">Audio and video</span>
+            <button type="button" aria-label="Close" onClick={() => setDevicesOpen(false)} className="flex cursor-pointer border-0 bg-transparent p-1 text-[#bdc1c6] hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <DevicePickers lists={lists} value={inUse} onChange={chooseDevice} />
+          <div className="flex justify-end">
+            <TestSpeaker speaker={inUse.audiooutput} />
+          </div>
+        </div>
+      )}
       <footer className="flex h-20 flex-none flex-wrap items-center justify-center gap-2.5 px-5">
         <ControlButton label={self.audioEnabled ? 'Mute' : 'Unmute'} danger={!self.audioEnabled} onClick={() => act('change the microphone', () => (self.audioEnabled ? self.disableAudio() : self.enableAudio()))}>
           {self.audioEnabled ? <Mic size={22} /> : <MicOff size={22} />}
@@ -431,6 +605,9 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         </ControlButton>
         <ControlButton label={self.screenShareEnabled ? 'Stop sharing' : 'Share screen'} on={self.screenShareEnabled} onClick={() => act('share the screen', () => (self.screenShareEnabled ? self.disableScreenShare() : self.enableScreenShare()))}>
           <MonitorUp size={22} />
+        </ControlButton>
+        <ControlButton label="Audio and video settings" on={devicesOpen} onClick={() => setDevicesOpen((o) => !o)}>
+          <Settings size={22} />
         </ControlButton>
         {/* Anyone in the room who is a member can record (ruling R8); a guest sees the badge only. */}
         {!info.guest && (
@@ -460,6 +637,7 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         </button>
       </footer>
     </div>
+    </SpeakerContext.Provider>
   );
 }
 
@@ -481,7 +659,7 @@ export function Room({ meetingRef }: { meetingRef: string }) {
         room = { ref: r.meeting.code, title: r.meeting.title, host: r.host, guest: false, meeting: r.meeting, chat: memberChat(r.meeting) };
         authToken = r.authToken;
       } else {
-        const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '');
+        const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '', guestKey());
         room = { ref: r.code, title: r.title, host: false, guest: true, meeting: null, chat: guestChat(r) };
         authToken = r.authToken;
       }
@@ -490,11 +668,20 @@ export function Room({ meetingRef }: { meetingRef: string }) {
       // The browser may now ask for the microphone or camera; the page says so instead of only "Joining…".
       setPhase({ kind: 'joining', media: choice.audio || choice.video });
       const c = await RealtimeKitClient.init({ authToken, defaults: { audio: choice.audio, video: choice.video } });
+      // The camera and microphone chosen on the check screen, or last time (a huddle skips the check screen).
+      const devices = choice.devices ?? rememberedDevices();
+      for (const kind of ['audioinput', 'videoinput'] as const) {
+        const id = devices[kind];
+        if (id) await switchInput(c.self, kind, id).catch(() => {});
+      }
       await c.join();
       if (!mounted.current) return void c.leave().catch(() => {});
       client.current = c;
       info.current = room;
-      setPhase({ kind: 'in', client: c, info: room });
+      // This browser's connection from before, if it was in the room a moment ago and never said it left.
+      const before = lastPeer(room.ref);
+      notePeer(room.ref, c.self.id);
+      setPhase({ kind: 'in', client: c, info: room, replaces: before && before !== c.self.id ? before : null });
       // A chime says the join has finished (lib/chime.ts).
       void playJoinChime();
     } catch (e) {
@@ -531,11 +718,16 @@ export function Room({ meetingRef }: { meetingRef: string }) {
     };
   }, [meetingRef, join]);
 
-  // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
+  // Closing or reloading the tab leaves too. RealtimeKit is told, so the others lose this tile at once: without it the
+  // old connection stays until RealtimeKit times it out, and a person who comes straight back shows twice. Our server
+  // hears it at once as well (a huddle's roster in Chat).
   useEffect(() => {
     mounted.current = true;
     const onClose = () => {
-      if (client.current?.self.roomJoined && info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
+      const c = client.current;
+      if (!c?.self.roomJoined) return;
+      void c.leave().catch(() => {});
+      if (info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
     };
     window.addEventListener('pagehide', onClose);
     return () => {
@@ -553,6 +745,7 @@ export function Room({ meetingRef }: { meetingRef: string }) {
     return (
       <InRoom
         client={phase.client}
+        replaces={phase.replaces}
         info={phase.info}
         onLeft={() => {
           if (!phase.info.guest) void api.leave(phase.info.ref).catch(() => {});

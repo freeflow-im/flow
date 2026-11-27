@@ -310,6 +310,11 @@ export class DocController {
     return { spacers: p.spacers, pageCount: p.pageCount, blockPages: p.blockPages };
   }
 
+  /** The pages have been measured at least once (always true in Pageless mode, where there is nothing to measure). */
+  paginated(): boolean {
+    return this.pageSetup().mode !== 'pages' || paginationOf(this.state).layout !== null;
+  }
+
   /** 1-based page a top-level block starts on, or null when pages are not shown. */
   pageOfBlock(index: number): number | null {
     if (this.pageSetup().mode !== 'pages') return null;

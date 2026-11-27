@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { nameWithExt } from '../../../shared/docNames.ts';
 import type { Deck, SlideElement } from '../../../shared/deck.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
-import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, GRID } from '../../../shared/whiteboard.ts';
+import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, GRID, type Whiteboard } from '../../../shared/whiteboard.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useRegisterWhiteboard } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
@@ -58,9 +58,11 @@ const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagNa
  * A whiteboard's page (`/w/:id`), or, with `id` and `framed`, a board in another page's frame (the global scratchpad,
  * pages/ScratchpadPage.tsx): the toolbar and the board only, no title, menus or file actions.
  */
-export function WhiteboardPage(props: { id?: string; framed?: boolean } = {}) {
+export function WhiteboardPage(props: { id?: string; framed?: boolean; initial?: { meta: SheetMeta; board: Whiteboard } } = {}) {
   const params = useParams<{ id: string }>();
   const id = props.id ?? params.id;
+  // A board the page was handed already loaded (the scratchpad's), used once instead of loading it again.
+  const initial = useRef(props.initial);
   const [state, setState] = useState<{ meta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> } | { error: string } | null>(null);
 
   useEffect(() => {
@@ -68,8 +70,9 @@ export function WhiteboardPage(props: { id?: string; framed?: boolean } = {}) {
     let stopSync = () => {};
     let cancelled = false;
     setState(null);
-    api
-      .getWhiteboard(id!)
+    const given = initial.current?.meta.id === id ? initial.current : undefined;
+    initial.current = undefined;
+    (given ? Promise.resolve(given) : api.getWhiteboard(id!))
       .then(({ meta, board }) => {
         if (cancelled) return;
         // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).

@@ -22,6 +22,14 @@ export interface ComposeDraft {
   forwardAttachments?: { index: number; filename: string; mimeType: string; size: number }[];
 }
 
+/**
+ * The editor's HTML as it is sent: paragraphs without margins, so the message reads as it was written, one line per
+ * Enter (as Gmail writes), in any reader. An empty paragraph keeps its line with a no-break space: an empty <p> has no
+ * height, and a <br> would come back as two lines when the message is quoted into a reply.
+ */
+export const tightParagraphs = (html: string) =>
+  html.replace(/<p>(<\/p>)?/g, (_, empty?: string) => (empty ? '<p style="margin:0">&nbsp;</p>' : '<p style="margin:0">'));
+
 export const emptyDraft = (to: Address[] = []): ComposeDraft => ({ to, cc: [], bcc: [], subject: '', html: '' });
 
 /**
