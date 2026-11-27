@@ -109,7 +109,31 @@ export interface BrowserReach {
    * assistant's panel over it. The page sends it; it says only what is on screen.
    */
   installedApp?: { app: string; label?: string };
+  /**
+   * The hosted suite only: the message was sent from FreeFlow Browser's side panel (docs/specs/browser-extension.md), about
+   * the web page in front of the person. The panel sends it; the page's words are data, not instructions.
+   */
+  webPage?: WebPageContext;
 }
+
+/** The web page a message from FreeFlow Browser's side panel is about (BrowserReach `webPage`). */
+export interface WebPageContext {
+  /** The extension's id for the tab: browser_read and browser_screenshot take it. */
+  tab: number;
+  url: string;
+  title: string;
+  /** The page's text as the extension read it, at most MAX_WEB_PAGE_TEXT characters. */
+  text: string;
+  /** The page is longer than `text`: browser_read with an offset reads on. */
+  truncated?: boolean;
+  /** The text the person selected on the page. */
+  selection?: string;
+}
+
+/** Most text of the person's page sent with a message from the side panel. */
+export const MAX_WEB_PAGE_TEXT = 20_000;
+/** Most selected text sent with it. */
+export const MAX_WEB_PAGE_SELECTION = 4000;
 
 /** An installed app's tool as a turn is offered it (BrowserReach `appTools`). */
 export interface AppToolOffer { name: string; description: string; input: Record<string, unknown> }

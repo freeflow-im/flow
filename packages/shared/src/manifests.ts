@@ -229,6 +229,14 @@ export const APP_MANIFESTS: AppManifest[] = [
     client: { dist: 'packages/home/dist', basePath: '/home/', optional: true },
     pages: [
       { path: '/home', html: 'home.html', signIn: true },
+      // FreeFlow Browser's side panel (docs/specs/browser-extension.md): framed only by the extension (its store and dev
+      // builds' ids, as in packages/docs/client/src/agent/browserBridge.ts) and by the suite itself.
+      {
+        path: '/home/browser',
+        html: 'home.html',
+        signIn: true,
+        headers: { 'content-security-policy': "frame-ancestors 'self' chrome-extension://dlfndpnhaonbojepfbiaonajkoonmmok chrome-extension://gnmcgiakoiplophhcoekeeaghfiipglo" },
+      },
       { path: '/home/*', html: 'home.html', signIn: true, passFiles: true },
     ],
     events: [],

@@ -17,13 +17,15 @@ const EXTENSION_IDS = [BROWSER_EXTENSION_STORE_ID, BROWSER_EXTENSION_DEV_ID].fil
 /** The id that last answered a ping; calls go there. */
 let extensionId: string = EXTENSION_IDS[0] ?? BROWSER_EXTENSION_DEV_ID;
 
-interface ExtensionAnswer {
+export interface ExtensionAnswer {
   ok: boolean;
   content?: string;
   /** A picture the tool took (browser_screenshot). */
   image?: { mediaType: 'image/jpeg' | 'image/png'; data: string };
   error?: string;
   version?: string;
+  /** Other fields a side-panel request answers with (its page). */
+  [field: string]: unknown;
 }
 
 /**
@@ -59,9 +61,26 @@ function send(message: unknown, timeoutMs: number, id = extensionId): Promise<Ex
   });
 }
 
+/** Set by FreeFlow Browser's side panel: the extension whose panel holds the page, asked alone (both builds may be installed). */
+let pinned: string | null = null;
+
+/** The ids the page may talk to: the store build's and the dev build's. */
+export const isBrowserExtensionId = (id: string): boolean => EXTENSION_IDS.includes(id);
+
+/** Talk only to this extension (the one whose side panel holds the page), not whichever answers first. */
+export function pinBrowserExtension(id: string): void {
+  if (!isBrowserExtensionId(id)) return;
+  pinned = id;
+  extensionId = id;
+  checking = null;
+}
+
+/** Sends one message to the extension in use (the side panel's own requests); null when it does not answer. */
+export const askBrowserExtension = (message: unknown, timeoutMs = 10_000): Promise<ExtensionAnswer | null> => send(message, timeoutMs);
+
 /** Asks each id in turn (the store build first) and keeps the first that answers. */
 async function ping(): Promise<boolean> {
-  for (const id of EXTENSION_IDS) {
+  for (const id of pinned ? [pinned] : EXTENSION_IDS) {
     const answer = await send({ type: 'ping' }, 1500, id);
     if (answer?.ok) {
       extensionId = id;

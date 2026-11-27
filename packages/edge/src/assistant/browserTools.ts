@@ -11,6 +11,8 @@ import { z } from 'zod';
 import { BROWSER_TOOLS, type AgentContext } from '@flow/docs/shared/agent/protocol.ts';
 
 const tab = z.number().int().positive().describe('The tab, by the number browser_open or browser_tabs gave.');
+/** browser_read and browser_screenshot also take the tab of the user's page a side-panel message is about (its context names it). */
+const readTab = z.number().int().positive().describe("The tab, by the number browser_open or browser_tabs gave, or the user's own tab that the context names (FreeFlow Browser's side panel).");
 const ref = z.string().min(1).max(12).describe('The element, by its number in [brackets] from the last read of the page.');
 
 export const BROWSER_SCHEMAS: Record<string, z.ZodObject> = {
@@ -21,8 +23,8 @@ export const BROWSER_SCHEMAS: Record<string, z.ZodObject> = {
     ),
   browser_tabs: z.object({}).describe('Lists the tabs you have open in the user\'s browser (only yours, never the user\'s own tabs).'),
   browser_read: z
-    .object({ tab, offset: z.number().int().min(0).optional().describe('Where to continue a long page, as the last read said.') })
-    .describe('Reads one of your tabs again: its text, with links, buttons and fields numbered [n]. Read again after the page changes; numbers from an old read may be gone.'),
+    .object({ tab: readTab, offset: z.number().int().min(0).optional().describe('Where to continue a long page, as the last read said.') })
+    .describe('Reads one of your tabs again (or the user\'s own tab the context names): its text, with links, buttons and fields numbered [n]. Read again after the page changes; numbers from an old read may be gone.'),
   browser_click: z.object({ tab, ref }).describe('Clicks a link or button in one of your tabs, waits for the page, and reads it.'),
   browser_type: z
     .object({
@@ -40,7 +42,7 @@ export const BROWSER_SCHEMAS: Record<string, z.ZodObject> = {
     .describe('Goes to another address in one of your tabs, or back, and reads the page.'),
   browser_close: z.object({ tab }).describe('Closes one of your tabs when you are done with it.'),
   browser_screenshot: z
-    .object({ tab })
+    .object({ tab: readTab })
     .describe(
       'Takes a picture of the part of one of your tabs that is in view, and attaches it for you to look at. Use it when the page\'s look matters (layout, pictures, charts, maps), or when browser_read seems to miss what a page shows. browser_scroll moves the view first.',
     ),

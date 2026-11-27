@@ -3,7 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseEvents } from './suiteChat';
-import { SuiteAssistant } from './AssistantChat';
+import { SuiteAssistant, SuiteAssistantColumn } from './AssistantChat';
 
 const sse = (...events: unknown[]) => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''))); c.close(); } }), { status: 200 });
 let turns: Record<string, unknown>[];
@@ -78,5 +78,25 @@ describe('the suite assistant chat', () => {
     expect(typeof turns[0]!.tz).toBe('string');
     expect(turns[1]).toMatchObject({ toolResults: [{ id: 'c1', isError: true }] });
     expect(screen.getByText(/list events/)).toBeTruthy();
+  });
+
+  it('lets a page add context to each message and run the browser tools itself (FreeFlow Browser\'s side panel)', async () => {
+    const prepare = vi.fn(async () => ({ browser: true, webPage: { tab: 7, url: 'https://example.com/', title: 'Example', text: 'Hello' } }));
+    const runClientCalls = vi.fn(async (calls: { id: string; name: string }[]) => ({ toolResults: calls.map((c) => ({ id: c.id, content: 'ran it' })), pictures: { c1: 'data:image/jpeg;base64,AAAA' } }));
+    render(<SuiteAssistantColumn organizationId="o1" page="home" options={{ prepare, runClientCalls }} composerTop={<div>chip here</div>} placeholder="Ask about this page…" />);
+    expect(await screen.findByText('chip here')).toBeTruthy();
+    const input = (await screen.findByTestId('suite-assistant-input')) as HTMLTextAreaElement;
+    expect(input.placeholder).toBe('Ask about this page…');
+    fireEvent.change(input, { target: { value: 'summarize' } });
+    await act(async () => { fireEvent.click(screen.getByTestId('suite-assistant-send')); });
+    await screen.findByText('two');
+    // Read once for the message, and sent with both requests of its turn.
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(turns.map((t) => (t.context as { webPage?: { tab: number } }).webPage?.tab)).toEqual([7, 7]);
+    expect(turns[0]!.context).toMatchObject({ page: 'home', browser: true });
+    // The page ran the call, so its answer went back as it is, with the picture under the tool's line.
+    expect(runClientCalls).toHaveBeenCalledWith([{ id: 'c1', name: 'open_sheet', input: {} }]);
+    expect(turns[1]!.toolResults).toEqual([{ id: 'c1', content: 'ran it' }]);
+    expect(screen.getByAltText('Picture 1 the tool took')).toBeTruthy();
   });
 });
