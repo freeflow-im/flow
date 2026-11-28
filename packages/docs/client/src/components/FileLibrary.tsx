@@ -8,6 +8,8 @@ import { isHtmlName, opensInApp, type SheetMeta } from '../../../shared/types.ts
 import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon, WhiteboardIcon } from './Logo.tsx';
 import { openSuiteSearch } from '@flow/suite-bar';
 import { pastedFile } from '../pastedFile.ts';
+import { queueFinished, type ImportQueue } from '../importQueue.ts';
+import { ImportProgress } from './ImportProgress.tsx';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
 /** Whether a row opens in the app: every document does, a stored file only if the app can show it (shared/types.ts). Any other is listed, with its menu, but not opened. */
@@ -287,6 +289,12 @@ export interface FileLibraryProps {
   /** Name of the file being imported, shown as progress; null when idle. */
   importing: string | null;
   onImport(file: File): void;
+  /** Several files dropped at once: imported together, none opened. Without it only the first is imported. */
+  onImportMany?(files: File[]): void;
+  /** The files of a several-file import and how far each has got, shown in a small card; null when there is none. */
+  importQueue?: ImportQueue | null;
+  /** Closes the card of a finished several-file import. */
+  onDismissImportQueue?(): void;
   /** Show the built-in "Getting started" guide. Adds its tile at the start of the "Start something new" row, until the user hides it. */
   onGettingStarted?(): void;
   /** Open the file in place: the page stays inside the folder, with breadcrumbs back to it. */
@@ -353,6 +361,8 @@ function FilePeek({ item, x, y, preview }: { item: LibraryItem; x: number; y: nu
 
 export function FileLibrary(props: FileLibraryProps) {
   const { items, error, importing, onOpen } = props;
+  // An import is running: one file (the modal), or several (the card) not yet all through.
+  const busy = !!importing || (!!props.importQueue && !queueFinished(props.importQueue));
   const others = props.otherLists ?? [];
   // The list shown in place of the folder's, if one is.
   const other = others.find((l) => l.active);
@@ -596,11 +606,11 @@ export function FileLibrary(props: FileLibraryProps) {
   // text a Markdown document. Not while a field or a dialog has the keyboard: there a paste is typing.
   const onImportRef = useRef(props.onImport);
   onImportRef.current = props.onImport;
-  const importingRef = useRef(importing);
-  importingRef.current = importing;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      if (e.defaultPrevented || importingRef.current) return;
+      if (e.defaultPrevented || busyRef.current) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       if (document.querySelector('.modal-backdrop')) return;
@@ -818,8 +828,10 @@ export function FileLibrary(props: FileLibraryProps) {
           dragged.current = null;
           return;
         }
-        const file = e.dataTransfer.files[0];
-        if (file && !importing) props.onImport(file);
+        const files = Array.from(e.dataTransfer.files);
+        if (!files.length || busy) return;
+        if (files.length > 1 && props.onImportMany) props.onImportMany(files);
+        else props.onImport(files[0]);
       }}
     >
       {!searchInBar && (
@@ -893,7 +905,7 @@ export function FileLibrary(props: FileLibraryProps) {
             <div>
               <button
                 className="new-sheet-tile import-tile"
-                disabled={!!importing}
+                disabled={busy}
                 onClick={async () => {
                   const file = await pickFile(props.importAccept);
                   if (file) props.onImport(file);
@@ -1182,7 +1194,8 @@ export function FileLibrary(props: FileLibraryProps) {
           </div>
         </div>
       )}
-      {dragOver && !importing && <div className="drop-hint">Drop a file to import it</div>}
+      {props.importQueue && <ImportProgress queue={props.importQueue} onDismiss={props.onDismissImportQueue} />}
+      {dragOver && !busy && <div className="drop-hint">{props.onImportMany ? 'Drop files to import them' : 'Drop a file to import it'}</div>}
       {creating && (
         <PromptModal
           title={`New ${KIND_NAMES[creating]}`}

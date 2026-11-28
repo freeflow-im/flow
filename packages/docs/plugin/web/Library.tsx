@@ -6,6 +6,7 @@ import { FileLibrary, type LibraryItem } from '../../client/src/components/FileL
 import { HomeIcon } from '../../client/src/components/Logo.tsx';
 import { Modal } from '../../client/src/components/Modal.tsx';
 import { CSV_ACCEPT, DOCX_ACCEPT, EXCEL_ACCEPT, HTML_ACCEPT, MARKDOWN_ACCEPT, PDF_ACCEPT, PPTX_ACCEPT, VIDEO_ACCEPT } from '../../client/src/importFile.ts';
+import { runImports, type ImportQueue } from '../../client/src/importQueue.ts';
 import { videoTypeOf } from '../../shared/types.ts';
 import type { Host, LibraryKind } from './host.ts';
 
@@ -36,25 +37,50 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
       .catch((e: Error) => setError(e.message));
   useEffect(() => void load(), [host]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const checkImport = (file: File) =>
+    !/\.(xlsx?|docx|pptx|csv|md|markdown|pdf|html?|png|jpe?g|gif|webp)$/i.test(file.name) && !videoTypeOf(file.name)
+      ? 'Choose an Excel workbook (.xlsx, .xls), Word document (.docx), PowerPoint presentation (.pptx), CSV file (.csv), Markdown file (.md), PDF (.pdf), web page (.html), video (.mp4, .mov, .webm) or image (.png, .jpg, .gif, .webp).'
+      : null;
   /** Import: a one-time ticket from the server, then the bytes go straight to its import route. */
+  const upload = async (file: File) => {
+    const { ticket, url } = await host.call<{ ticket: string; url: string }>('upload_ticket');
+    const q = new URLSearchParams({ ticket, name: file.name, title: titleFromFileName(file.name) });
+    const res = await fetch(`${url}?${q}`, { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+    const body = (await res.json()) as { file?: FileSummary; warnings?: string[]; error?: string };
+    if (!res.ok || !body.file) throw new Error(body.error ?? `Import failed (${res.status}).`);
+    return { file: body.file, warnings: body.warnings ?? [] };
+  };
   const importFile = async (file: File) => {
-    if (!/\.(xlsx?|docx|pptx|csv|md|markdown|pdf|html?|png|jpe?g|gif|webp)$/i.test(file.name) && !videoTypeOf(file.name)) return setError('Choose an Excel workbook (.xlsx, .xls), Word document (.docx), PowerPoint presentation (.pptx), CSV file (.csv), Markdown file (.md), PDF (.pdf), web page (.html), video (.mp4, .mov, .webm) or image (.png, .jpg, .gif, .webp).');
+    const problem = checkImport(file);
+    if (problem) return setError(problem);
     setError(null);
     setImporting(file.name);
     try {
-      const { ticket, url } = await host.call<{ ticket: string; url: string }>('upload_ticket');
-      const q = new URLSearchParams({ ticket, name: file.name, title: titleFromFileName(file.name) });
-      const res = await fetch(`${url}?${q}`, { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
-      const body = (await res.json()) as { file?: FileSummary; warnings?: string[]; error?: string };
-      if (!res.ok || !body.file) throw new Error(body.error ?? `Import failed (${res.status}).`);
+      const done = await upload(file);
       void load();
-      if (body.warnings?.length) setImported({ file: body.file, warnings: body.warnings });
-      else onOpen({ kind: body.file.kind, id: body.file.id });
+      if (done.warnings.length) setImported(done);
+      else onOpen({ kind: done.file.kind, id: done.file.id });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setImporting(null);
     }
+  };
+  /** Several files dropped at once: imported one after another, none opened. */
+  const [importQueue, setImportQueue] = useState<ImportQueue | null>(null);
+  const importFiles = async (files: File[]) => {
+    setError(null);
+    const q = await runImports(
+      files,
+      async (file) => {
+        const problem = checkImport(file);
+        if (problem) throw new Error(problem);
+        await upload(file);
+        void load();
+      },
+      setImportQueue,
+    );
+    if (q.every((i) => i.state === 'done')) setTimeout(() => setImportQueue((cur) => (cur === q ? null : cur)), 4000);
   };
 
   // The guide is a presentation of the user's own: the first click makes their copy of it (on the server).
@@ -113,6 +139,9 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         importHint="Excel, PowerPoint, Word, CSV, Markdown, PDF, HTML, video or image. You can also attach a file in the chat and ask ChatGPT to import it, or ask it to make something new."
         importing={importing}
         onImport={(file) => void importFile(file)}
+        onImportMany={(files) => void importFiles(files)}
+        importQueue={importQueue}
+        onDismissImportQueue={() => setImportQueue(null)}
         onOpen={(item) => onOpen(asFile(item))}
         rowActions={(item) => {
           const link = host.appLink(asFile(item));

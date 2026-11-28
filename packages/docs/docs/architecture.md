@@ -260,6 +260,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
   it is, and so is any other plain text file, edited as text). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
   with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
+- Files dropped on the file list (`FileLibrary`): a single file is imported and opened (`onImport`), as one picked or pasted is.
+  Several at once go to `onImportMany`, which imports them one after another with `runImports` (`client/src/importQueue.ts`)
+  and opens none; `ImportProgress` is the card in the corner showing each file's state.
 - A PDF's text is read as Markdown by `server/pdfMarkdown.ts` (`pdfToMarkdown`, on LiteParse: PDFium for the text and
   layout, Tesseract OCR for the pages that are scans, in worker processes with a deadline; pictures are left out).
   `read_doc` on a stored PDF reads it, and Convert to Markdown (the PDF's page and its menu in the list,
