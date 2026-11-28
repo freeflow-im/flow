@@ -28,6 +28,7 @@ import { LocalFolderMenu, LocalFolderParent, parentDir } from '../components/Loc
 import { ScratchPadTile } from '../components/ScratchPadTile.tsx';
 import { openFromRecents } from './OpenLocalFile.tsx';
 import { FilePreviewFrame } from '../components/FilePreviewFrame.tsx';
+import { runImports, type ImportQueue } from '../importQueue.ts';
 import { checkImportFile, imageTypeOf, isKnownImport, isCsvFile, isHtmlFile, isImageFile, isMarkdownFile, isPdfFile, isPowerPointFile, isVideoFile, isWordFile, titleFromFileName } from '../importFile.ts';
 import { csvTitle } from '../../../shared/csv.ts';
 import { cleanFolderPath, folderTrail } from '../../../shared/folders.ts';
@@ -404,70 +405,88 @@ function FileList() {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
+  /** Stores one imported file in this folder; resolves to the page that opens it, or null for a file only listed. */
+  const storeImport = async (file: File): Promise<{ to: string; warnings?: string[] } | null> => {
+    if (isPowerPointFile(file)) {
+      const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), newPlace);
+      return { to: `/d/${deck.id}`, warnings };
+    }
+    if (isVideoFile(file)) {
+      // Stored as the file it is and played in its own page.
+      const stored = await api.uploadFile(file.name, file, newPlace);
+      return { to: `/f/${stored.id}` };
+    }
+    if (isImageFile(file)) {
+      // Stored as the picture it is and shown in its own page.
+      const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), newPlace);
+      return { to: `/f/${stored.id}` };
+    }
+    if (isHtmlFile(file)) {
+      // Stored as the page it is and shown in a sandboxed frame. Sent as plain bytes: the server names its type.
+      const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
+      return { to: `/f/${stored.id}` };
+    }
+    if (isPdfFile(file)) {
+      const { file: stored } = await api.importPdf(file, newPlace);
+      return { to: `/f/${stored.id}` };
+    }
+    if (isWordFile(file)) {
+      const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), newPlace);
+      return { to: `/doc/${doc.id}`, warnings };
+    }
+    if (isMarkdownFile(file)) {
+      const text = await file.text();
+      const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, newPlace);
+      return { to: `/md/${doc.id}` };
+    }
+    if (isCsvFile(file)) {
+      // Stored as the CSV file it is, and opened in the spreadsheet editor.
+      const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), newPlace);
+      return { to: `/s/${sheet.id}` };
+    }
+    if (!isKnownImport(file)) {
+      // Any other file is kept as it is: it is listed here, to download, move or delete, but not opened.
+      await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
+      return null;
+    }
+    const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), newPlace);
+    return { to: `/s/${sheet.id}`, warnings };
+  };
+
+  /** One file: imported, then opened (a file that only gets listed is not). */
   const importFile = async (file: File) => {
     const problem = checkImportFile(file);
     if (problem) return setError(problem);
     setError(null);
     setImporting(file.name);
     try {
-      if (isPowerPointFile(file)) {
-        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), newPlace);
-        navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
-        return;
-      }
-      if (isVideoFile(file)) {
-        // Stored as the file it is and played in its own page.
-        const stored = await api.uploadFile(file.name, file, newPlace);
-        navigate(`/f/${stored.id}`);
-        return;
-      }
-      if (isImageFile(file)) {
-        // Stored as the picture it is and shown in its own page.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), newPlace);
-        navigate(`/f/${stored.id}`);
-        return;
-      }
-      if (isHtmlFile(file)) {
-        // Stored as the page it is and shown in a sandboxed frame. Sent as plain bytes: the server names its type.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
-        navigate(`/f/${stored.id}`);
-        return;
-      }
-      if (isPdfFile(file)) {
-        const { file: stored } = await api.importPdf(file, newPlace);
-        navigate(`/f/${stored.id}`);
-        return;
-      }
-      if (isWordFile(file)) {
-        const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), newPlace);
-        navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
-        return;
-      }
-      if (isMarkdownFile(file)) {
-        const text = await file.text();
-        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, newPlace);
-        navigate(`/md/${doc.id}`);
-        return;
-      }
-      if (isCsvFile(file)) {
-        // Stored as the CSV file it is, and opened in the spreadsheet editor.
-        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), newPlace);
-        navigate(`/s/${sheet.id}`);
-        return;
-      }
-      if (!isKnownImport(file)) {
-        // Any other file is kept as it is: it is listed here, to download, move or delete, but not opened.
-        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
-        setImporting(null);
-        await load();
-        return;
-      }
-      const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), newPlace);
-      navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
+      const opened = await storeImport(file);
+      if (opened) return navigate(opened.to, opened.warnings ? { state: { importWarnings: opened.warnings } } : undefined);
+      setImporting(null);
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setImporting(null);
     }
+  };
+
+  /** Several files dropped at once: imported one after another into this folder, with the progress card; none is opened. */
+  const [importQueue, setImportQueue] = useState<ImportQueue | null>(null);
+  const importFiles = async (files: File[]) => {
+    setError(null);
+    const q = await runImports(
+      files,
+      async (file) => {
+        const problem = checkImportFile(file);
+        if (problem) throw new Error(problem);
+        await storeImport(file);
+        void load(false); // each file shows up in the list as it arrives
+      },
+      setImportQueue,
+    );
+    await load();
+    // A clean run closes itself; one with a failure stays until closed, so its reasons can be read.
+    if (q.every((i) => i.state === 'done')) setTimeout(() => setImportQueue((cur) => (cur === q ? null : cur)), 4000);
   };
 
   // The folder's folders, and its spreadsheets, presentations, documents, Markdown documents and stored files in one list.
@@ -820,6 +839,9 @@ function FileList() {
       }
       importing={importing}
       onImport={(file) => void importFile(file)}
+      onImportMany={(files) => void importFiles(files)}
+      importQueue={importQueue}
+      onDismissImportQueue={() => setImportQueue(null)}
       onOpen={(s) => (recents ? void openRecent(s) : favoritesShown ? void openFavorite(s) : navigate(pathOf(s)))}
       onOpenInNewTab={elsewhere ? undefined : (s) => void window.open(appUrl(pathOf(s)), '_blank')}
       titleLink={elsewhere ? undefined : (s, children) => (

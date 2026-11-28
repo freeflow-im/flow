@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Dropping several files on a Docs folder at once is on web and desktop only (2026-11-28, Taskboard task 55).** The file list is the suite's Docs app, which macOS and iOS open in the browser (deliberate, as for the rest of Docs).
 - **The FreeFlow Browser side panel is Chrome only (2026-11-26, Taskboard task 54).** It is a Chrome extension: the panel is the suite's `/home/browser` page framed by the extension, so the desktop shell, macOS and iOS have no way to show it (deliberate; the same chat is in every client's assistant).
 - **Dragging a file onto a folder of the Docs folder tree is on web and desktop only (2026-11-26, Taskboard task 53).** The tree is the suite's Docs panel, which macOS and iOS open in the browser (deliberate, as for the rest of Docs).
 - **Pinning a participant in a meeting is on web and desktop only (2026-11-26, Taskboard task 49).** The pin button is on the Meet room's tiles, which macOS and iOS open in the browser (closes with Meet phase 6, native call screens).
