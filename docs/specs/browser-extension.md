@@ -11,12 +11,15 @@ The most likely reason is that the extension did nothing on its own. With a pane
 
 ## 1. What the person sees
 
-1. They click the FreeFlow icon in Chrome's toolbar. Chrome's side panel opens on the right of the window.
+1. They click the FreeFlow icon in Chrome's toolbar. Chrome's side panel opens on the right, **for that tab only**
+   (operator request 2026-11-27: the panel belongs to its tab, not to the whole window).
 2. The panel shows their assistant's conversation: the same one as in the FreeFlow suite (§4).
-3. Above the message box is a **page chip**: the favicon and title of the tab in front, for example
-   "📄 How R2 pricing works — developers.cloudflare.com". It changes when they switch tabs.
+3. Above the message box is a **page chip**: the favicon and title of the panel's tab, for example
+   "📄 How R2 pricing works — developers.cloudflare.com". It follows that tab as it goes to other pages.
 4. They type "Summarize this page" and send. The assistant answers in the panel, streaming, as it does in the suite.
-5. The panel stays open when they change tabs. Each message is about the tab in front when it is sent.
+5. Switching to another tab hides the panel; switching back shows it again, as it was. Another tab can have its own
+   panel (click the icon there). Each message is about the panel's own tab. Every panel shows the same conversation
+   (the home chat, §3.1), loaded when it opens.
 
 ```
 ┌──────────────────────────────────┐
@@ -99,7 +102,7 @@ build with a person's own settings. Check both by hand once the dev build has a 
 
 ### 3.1 What is sent
 
-When the person sends a message, the frame asks the extension for the tab in front of the panel's window:
+When the person sends a message, the frame asks the extension for the panel's own tab:
 
 ```
 panel page → frame: { type: 'flow-panel', key, window }      (postMessage, to the suite's origin)
@@ -147,8 +150,8 @@ the extension reads the tab in front, but only in this case:
 
 - The request comes from the panel's own frame: it has no `sender.tab` (§2, spike findings).
 - The panel page makes a random `key` each time it opens, keeps it in the extension's session storage, and gives it to
-  the frame by `postMessage` (never in an address). The extension answers `page` only with that key, and only for the
-  window the panel is open in.
+  the frame by `postMessage` (never in an address). The extension answers `page` only with that key, and only with the
+  tab that panel belongs to (session storage `panelKeys`: key → tab).
 - So another FreeFlow page, or a turn started in the suite, cannot read the person's tabs.
 - It reads only when the person sends a message, never in the background.
 
@@ -156,22 +159,32 @@ The store listing and privacy answers change to say this (§6).
 
 ### 3.3 Acting on the page
 
-**Phase 1 (this design): read only.** For the person's own tab the agent gets `browser_read` (to page through a long
-page) and `browser_screenshot`. Clicks, typing and navigation stay in the agent's own tabs, as today. If the agent
-needs to act, it opens the same address in its own tab with `browser_open`, which keeps the person's tab safe.
+**Opening the panel on a tab lets the agent use it** (operator request 2026-11-27, once panels became per tab). The
+panel belongs to its tab, so opening it there is a clear act by the person. From that panel, the agent may use every
+browser tool on the tab (read, click, type, scroll, navigate, screenshot, hand off) except `browser_close`: it never
+closes the person's tab. Closing the panel takes the permission away. Until 2026-11-27 the person's tab was read only.
 
-**Phase 2 (later, needs a ruling): act on the person's tab.** A switch on the page chip, "Let Sam use this tab". While
-it is on, `browser_click`, `browser_type`, `browser_scroll` and `browser_navigate` work on that tab too, and the chip
-shows that the agent is using it. It turns off when the turn ends.
+- **Sites.** Opening the panel does not allow the tab's site. The first time the agent uses the tab (any tool, a read
+  included), the extension asks for its site unless it is on the list, as in the agent's own tabs (§3.4). The list is the
+  record of every site the agent used (operator ruling 2026-11-27). Only the page text the person's own message carries
+  is exempt: that is the person's act, not the agent's.
+- **Blocking only while the agent acts.** The agent's tabs block other sites all the time. The person's tab blocks them
+  only while one of the agent's actions runs in it (`guarded`: a `declarativeNetRequest` rule for that tab, added before
+  the action and removed after), so the person's own clicks are never blocked.
+- **Going back.** Chrome's `tabs.goBack` skips pages left by a script's click (its history intervention), which every
+  click of the agent's is. So "back" runs `history.back()` in the page, and after a refused site the tab goes straight to
+  the page it was on.
+- **Only the panel.** The assistant in Mail, Docs or Calendar (a FreeFlow page in a normal tab) still works only in its
+  own tabs: a call naming the person's tab from there fails.
 
 When the tab in front is one the agent opened itself (the person switched to it), it is not the person's tab: the
 `page` answer says `agentTab`, the chip says "Assistant's tab", and the agent may use every tool there. Asked to go
 somewhere else, it goes there in that tab with `browser_navigate` instead of opening another (found in testing,
 2026-11-26).
 
-The extension enforces this, not the model: a tab of the person's that the panel read (`page`) is remembered as shared, and only
-`browser_read` and `browser_screenshot` from the panel's frame may name it. A click or typing there fails with "Tab N is
-the user's own tab", and so does a read from a FreeFlow page in a normal tab (tested end to end, §7).
+The extension enforces this, not the model. A tab of the person's that a panel message read (`page`) is remembered as
+shared: after its panel closes, the panel may still read and screenshot it, nothing more. Any call naming the person's
+tab from a FreeFlow page in a normal tab fails, and so does `browser_close` on it (tested end to end, §7).
 
 The server offers the `browser_*` tools only to the person's own assistant (`edge/src/assistant/browserTools.ts`). So a
 shared agent picked in the panel gets the page's text, but cannot read further or take screenshots.
@@ -184,7 +197,7 @@ or goes to a site that is not on it, the extension asks the person: **Always**, 
 - **A site** is a host name without `www.`; a rule covers its subdomains (`linkedin.com` covers `uk.linkedin.com`).
   "Always" rules are in the extension's local storage; "This session" rules in session storage, which Chrome clears when
   it quits. A refusal is not remembered: the next try asks again. The model is told not to retry unless asked.
-- **Where it asks:** a card at the top of the side panel when one is open, else a small window (`ask.html`). Both are
+- **Where it asks:** a card at the top of the side panel when the tab in front has one, else a small window (`ask.html`). Both are
   the extension's own pages: no web page or FreeFlow page can answer. With no answer in 2 minutes, the call fails and
   the model is told so.
 - **Settings** (a tab in the panel) lists the rules, each with Remove, and adds one (Always or This session).
@@ -192,7 +205,8 @@ or goes to a site that is not on it, the extension asks the person: **Always**, 
   only) in the agent's own tabs for every site not on the list. So a click or a redirect to another site loads nothing:
   the tab shows Chrome's "blocked" page while the extension asks. Allowed, the page loads again; refused, the tab goes
   back. Before `browser_open` and `browser_navigate` the extension asks first, so nothing is blocked there.
-- **Not covered:** the person's own tab sent from the panel (they chose it), and frames inside a page (embeds, ads).
+- **Not covered:** the page text the person's own message carries (their act), and frames inside a page (embeds, ads).
+  Every tool the agent calls asks, on any tab: its own, the person's tab with the panel open, or one shared earlier.
   A link that opens a new tab (`target=_blank`) opens it outside the agent's tabs, as before.
 
 ## 4. Which agent, which organization

@@ -1,6 +1,7 @@
-// FreeFlow Browser's side panel (docs/specs/browser-extension.md). The chat is FreeFlow's own page (/home/browser) in a
-// frame, signed in with the person's FreeFlow session. This page tells the frame its key and window and the tab in
-// front (postMessage, to the suite's origin only), and shows the agent's tabs with Stop. The frame asks background.js for
+// FreeFlow Browser's side panel (docs/specs/browser-extension.md), one per tab: it belongs to the tab it was opened on,
+// hides when the person switches tabs and comes back with that tab. The chat is FreeFlow's own page (/home/browser) in a
+// frame, signed in with the person's FreeFlow session. This page tells the frame its key and its tab (postMessage, to
+// the suite's origin only), and shows the agent's tabs with Stop. The frame asks background.js for
 // the page's text itself, with the key, when a message is sent. Settings lists the sites the assistant may use, and
 // questions about new sites show here as cards (sites.js): the extension's own page, so no web page can answer them.
 
@@ -14,11 +15,19 @@ const allowedOrigin = (o) => o === PRODUCTION || (LOCAL_ALLOWED && /^http:\/\/(l
 const frame = document.getElementById('suite');
 const { suiteOrigin } = await chrome.storage.local.get('suiteOrigin');
 const origin = allowedOrigin(suiteOrigin) ? suiteOrigin : PRODUCTION;
+// The tab this panel belongs to (background.js opens one panel per tab, with its id in the address).
+const tabId = Number(new URLSearchParams(location.search).get('tab'));
 const { id: windowId } = await chrome.windows.getCurrent();
 // A new key each time the panel opens: background.js reads the person's tab only for a request that brings it.
 const key = crypto.randomUUID();
-await chrome.storage.session.set({ [`panel:${windowId}`]: key });
-addEventListener('pagehide', () => void chrome.storage.session.remove(`panel:${windowId}`));
+async function keepKey(on) {
+  const { panelKeys = {} } = await chrome.storage.session.get('panelKeys');
+  if (on) panelKeys[key] = tabId;
+  else delete panelKeys[key];
+  await chrome.storage.session.set({ panelKeys });
+}
+await keepKey(true);
+addEventListener('pagehide', () => void keepKey(false));
 
 frame.src = `${origin}/home/browser`;
 
@@ -28,7 +37,7 @@ const post = (message) => frame.contentWindow?.postMessage(message, origin);
 const readable = (url) => /^https?:\/\//.test(url ?? '') && !/^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)/.test(url);
 
 async function sendTab() {
-  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
   const { tabs: agentTabs = [] } = await chrome.storage.session.get('tabs');
   post({ type: 'flow-tab', tab: tab ? { id: tab.id, title: tab.title ?? '', url: tab.url ?? '', ...(tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}), readable: readable(tab.url), agent: agentTabs.includes(tab.id) } : null });
 }
@@ -40,9 +49,8 @@ addEventListener('message', (e) => {
     void sendTab();
   }
 });
-chrome.tabs.onActivated.addListener((info) => info.windowId === windowId && void sendTab());
-chrome.tabs.onUpdated.addListener((_id, change, tab) => {
-  if (tab.windowId === windowId && tab.active && (change.url || change.title || change.favIconUrl || change.status === 'complete')) void sendTab();
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (id === tabId && (change.url || change.title || change.favIconUrl || change.status === 'complete')) void sendTab();
 });
 
 // The agent's own tabs (background.js keeps them in session storage), and Stop, which closes them all.

@@ -745,6 +745,11 @@ describe('app context', () => {
     expect(own).toContain('(tab 42, one of your tabs)');
     expect(own).toContain('use browser_navigate with tab 42 rather than opening a new tab');
     expect(own).not.toContain('not click, type or navigate');
+    // The user's own tab with the panel open on it: every tool but close, and work there.
+    const act = renderContext({ page: 'home', browser: true, webPage: { tab: 7, canAct: true, url: 'https://example.com/', title: 'Example', text: 'x' } });
+    expect(act).toContain('they opened the FreeFlow side panel on it');
+    expect(act).toContain('but never close it');
+    expect(act).not.toContain('not click, type or navigate');
     // Without a page it is the home page as before.
     expect(renderContext({ page: 'home' })).toContain('on the home page');
   });
